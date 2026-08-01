@@ -1,10 +1,72 @@
 {
-  "project": {"name": "BMC Camera Board", "platform": "BMC"},
-  "target": {"transport": "ssh", "host": "192.168.1.20", "port": 22, "user": "root"},
-  "variables": {"controller": 1, "channel": 1, "device": "0x52", "link_reg": "0x0", "video_reg": "0x1"},
-  "monitoring": {"metrics": [
-    {"id": "link_lock", "name": "Link Lock", "group": "Camera 0", "command": "csi i2c {controller} {channel} {device} {link_reg}", "interval": 2, "parser": {"type": "regex", "pattern": "(?:value|data)[=: ]+(0x[0-9a-fA-F]+|\\d+)", "group": 1, "map": {"0x1": "LOCKED", "1": "LOCKED", "0x0": "UNLOCKED", "0": "UNLOCKED"}}, "display": {"kind": "status", "goodValues": ["LOCKED"]}},
-    {"id": "video_lock", "name": "Video Lock", "group": "Camera 0", "command": "csi i2c {controller} {channel} {device} {video_reg}", "interval": 2, "parser": {"type": "regex", "pattern": "(?:value|data)[=: ]+(0x[0-9a-fA-F]+|\\d+)", "group": 1}, "display": {"kind": "status", "goodValues": ["0x1", "1"]}}
-  ]},
+  "project": {
+    "name": "BMC Camera Board",
+    "platform": "BMC"
+  },
+  "target": {
+    "transport": "ssh",
+    "host": "192.168.1.1",
+    "port": 22,
+    "user": "root",
+    "connectTimeout": 8,
+    "identityFile": "",
+    "sshOptions": [
+      "StrictHostKeyChecking=accept-new"
+    ]
+  },
+  "variables": {
+    "controller": 1,
+    "channel": 1,
+    "device": "0x52",
+    "link_reg": "0x1A",
+    "video_reg": "0x1fd"
+  },
+  "monitoring": {
+    "metrics": [
+      {
+        "id": "link_lock",
+        "name": "Link Lock",
+        "group": "Camera 0",
+        "command": "csi i2c {controller} {channel} {device} {link_reg}",
+        "interval": 2,
+        "parser": {
+          "type": "regex",
+          "pattern": "(?:value|data)[=: ]+(0x[0-9a-fA-F]+|\\d+)",
+          "group": 1,
+          "map": {
+            "0": "UNLOCKED",
+            "1": "LOCKED",
+            "0x1": "LOCKED",
+            "0x0": "UNLOCKED"
+          }
+        },
+        "display": {
+          "kind": "status",
+          "goodValues": [
+            "LOCKED"
+          ]
+        }
+      },
+      {
+        "id": "video_lock",
+        "name": "Video Lock",
+        "group": "Camera 0",
+        "command": "csi i2c {controller} {channel} {device} {video_reg}",
+        "interval": 2,
+        "parser": {
+          "type": "regex",
+          "pattern": "(?:value|data)[=: ]+(0x[0-9a-fA-F]+|\\d+)",
+          "group": 1
+        },
+        "display": {
+          "kind": "status",
+          "goodValues": [
+            "0x1",
+            "1"
+          ]
+        }
+      }
+    ]
+  },
   "tests": []
 }

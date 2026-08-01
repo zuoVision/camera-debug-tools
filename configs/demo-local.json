@@ -1,16 +1,74 @@
 {
-  "project": {"name": "本机演示环境", "platform": "Local Demo"},
-  "target": {"transport": "local", "localShell": "/bin/sh"},
-  "variables": {"bus": 1, "device": "0x52", "link_reg": "0x0013", "video_reg": "0x0022"},
+  "project": {
+    "name": "本机演示环境",
+    "platform": "Local Demo"
+  },
+  "target": {
+    "transport": "ssh",
+    "localShell": "/bin/sh",
+    "host": "192.168.31.3",
+    "user": "zuozhe",
+    "port": 22,
+    "connectTimeout": 8,
+    "identityFile": "",
+    "sshOptions": [
+      "StrictHostKeyChecking=accept-new"
+    ]
+  },
+  "variables": {
+    "bus": 1,
+    "device": "0x52",
+    "link_reg": "0x0013",
+    "video_reg": "0x0022"
+  },
   "monitoring": {
     "metrics": [
-      {"id": "link_lock", "name": "Link Lock", "group": "Camera 0", "command": "printf 'LINK_LOCK=1\\n'", "interval": 2, "parser": {"type": "regex", "pattern": "LINK_LOCK=(\\d+)", "map": {"1": "LOCKED", "0": "UNLOCKED"}}, "display": {"kind": "status", "goodValues": ["LOCKED"]}},
-      {"id": "video_lock", "name": "Video Lock", "group": "Camera 0", "command": "printf 'VIDEO_LOCK=1\\n'", "interval": 2, "parser": {"type": "regex", "pattern": "VIDEO_LOCK=(\\d+)", "map": {"1": "LOCKED", "0": "UNLOCKED"}}, "display": {"kind": "status", "goodValues": ["LOCKED"]}},
-      {"id": "fps", "name": "Frame Rate", "group": "Camera 0", "command": "printf 'FPS=29.97\\n'", "interval": 1, "parser": {"type": "regex", "pattern": "FPS=([0-9.]+)"}, "display": {"kind": "number", "unit": "fps", "warnBelow": 25}}
+      {
+        "id": "camera_ping",
+        "name": "Camera Host",
+        "group": "192.168.31.5",
+        "command": "ping -c 1 192.168.31.5",
+        "interval": 3,
+        "timeout": 3,
+        "parser": {
+          "type": "regex",
+          "pattern": "(1 packets received|1 received)",
+          "group": 1,
+          "map": {
+            "1 packets received": "ONLINE",
+            "1 received": "ONLINE"
+          }
+        },
+        "display": {
+          "kind": "status",
+          "goodValues": [
+            "ONLINE"
+          ]
+        }
+      }
     ]
   },
   "tests": [
-    {"id": "smoke", "name": "Camera Smoke Test", "description": "示例冒烟测试", "command": "echo '[1/3] check link'; sleep 1; echo '[2/3] check video'; sleep 1; echo '[3/3] capture frame'; echo PASS", "params": []},
-    {"id": "duration", "name": "稳定性测试", "description": "按指定轮次执行示例检查", "command": "i=1; while [ $i -le {loops} ]; do echo \"loop $i/{loops}: OK\"; i=$((i+1)); sleep 1; done", "params": [{"name": "loops", "label": "循环次数", "type": "number", "default": 5}]}
+    {
+      "id": "smoke",
+      "name": "Camera Smoke Test",
+      "description": "示例冒烟测试",
+      "command": "echo '[1/3] check link'; sleep 1; echo '[2/3] check video'; sleep 1; echo '[3/3] capture frame'; echo PASS",
+      "params": []
+    },
+    {
+      "id": "duration",
+      "name": "稳定性测试",
+      "description": "按指定轮次执行示例检查",
+      "command": "i=1; while [ $i -le {loops} ]; do echo \"loop $i/{loops}: OK\"; i=$((i+1)); sleep 1; done",
+      "params": [
+        {
+          "name": "loops",
+          "label": "循环次数",
+          "type": "number",
+          "default": 5
+        }
+      ]
+    }
   ]
 }

@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
-import shlex
 import signal
 import subprocess
 import threading
@@ -81,6 +81,7 @@ class Runtime:
     def __init__(self, config_path: Path):
         self.config_path = config_path
         self.config = load_json(config_path)
+        self.target_password = ""
         self.jobs: Dict[str, Job] = {}
         self.metrics: Dict[str, Dict[str, Any]] = {}
         self.monitor_stop = threading.Event()
@@ -88,6 +89,110 @@ class Runtime:
 
     def reload(self) -> None:
         self.config = load_json(self.config_path)
+
+    def profiles(self) -> List[Dict[str, Any]]:
+        result = []
+        for path in sorted(CONFIG_DIR.glob("*.json")):
+            try:
+                data = load_json(path)
+                result.append({"file": path.name, "name": data.get("project", {}).get("name", path.stem),
+                               "platform": data.get("project", {}).get("platform", "通用"),
+                               "active": path.resolve() == self.config_path})
+            except (OSError, ValueError):
+                continue
+        return result
+
+    def switch_profile(self, filename: str) -> None:
+        if Path(filename).name != filename or not filename.endswith(".json"):
+            raise ValueError("配置文件名无效")
+        target_path = (CONFIG_DIR / filename).resolve()
+        if CONFIG_DIR.resolve() not in target_path.parents or not target_path.is_file():
+            raise ValueError("配置文件不存在")
+        data = load_json(target_path)
+        self.validate_config(data)
+        self.config_path = target_path
+        self.config = data
+        self.metrics.clear()
+
+    @staticmethod
+    def validate_config(data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            raise ValueError("配置根节点必须是 JSON 对象")
+        if not isinstance(data.get("target"), dict):
+            raise ValueError("缺少 target 配置")
+        monitoring = data.get("monitoring", {})
+        if not isinstance(monitoring, dict) or not isinstance(monitoring.get("metrics", []), list):
+            raise ValueError("monitoring.metrics 必须是数组")
+        if not isinstance(data.get("tests", []), list):
+            raise ValueError("tests 必须是数组")
+        ids = set()
+        for metric in monitoring.get("metrics", []):
+            if not isinstance(metric, dict) or not metric.get("id") or not metric.get("command"):
+                raise ValueError("每个监控指标必须包含 id 和 command")
+            if metric["id"] in ids:
+                raise ValueError(f"监控指标 id 重复: {metric['id']}")
+            ids.add(metric["id"])
+
+    def save_config(self, data: Dict[str, Any]) -> None:
+        self.validate_config(data)
+        temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        temporary.replace(self.config_path)
+        self.config = data
+        self.metrics.clear()
+
+    def update_target(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        mode = str(values.get("transport", "ssh"))
+        if mode not in ("ssh", "local"):
+            raise ValueError("transport 只能是 ssh 或 local")
+        target = dict(self.config.get("target", {}))
+        target["transport"] = mode
+        if mode == "ssh":
+            host = str(values.get("host", "")).strip()
+            user = str(values.get("user", "")).strip()
+            identity = str(values.get("identityFile", "")).strip()
+            if not host or not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
+                raise ValueError("SSH 主机地址无效")
+            if user and not re.fullmatch(r"[A-Za-z0-9._-]+", user):
+                raise ValueError("SSH 用户名无效")
+            try:
+                port = int(values.get("port", 22))
+                timeout = int(values.get("connectTimeout", 8))
+            except (TypeError, ValueError):
+                raise ValueError("端口和超时时间必须是整数")
+            if not 1 <= port <= 65535 or not 1 <= timeout <= 120:
+                raise ValueError("端口或超时时间超出范围")
+            target.update({"host": host, "user": user, "port": port,
+                           "connectTimeout": timeout, "identityFile": identity})
+            password = str(values.get("password", ""))
+            if password:
+                self.target_password = password
+            elif values.get("clearPassword"):
+                self.target_password = ""
+            target["sshOptions"] = ["StrictHostKeyChecking=accept-new"]
+        else:
+            target["localShell"] = str(values.get("localShell", target.get("localShell", "/bin/sh")))
+        self.config["target"] = target
+        temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(self.config, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        temporary.replace(self.config_path)
+        self.metrics.clear()
+        return target
+
+    def command_environment(self) -> Dict[str, str]:
+        environment = dict(os.environ)
+        if self.config.get("target", {}).get("transport") == "ssh" and self.target_password:
+            environment.update({
+                "SSH_ASKPASS": str(ROOT / "ssh_askpass.py"),
+                "SSH_ASKPASS_REQUIRE": "force",
+                "CAMERA_DEBUG_SSH_PASSWORD": self.target_password,
+                "DISPLAY": environment.get("DISPLAY", "camera-debug:0"),
+            })
+        return environment
 
     def transport_command(self, remote_command: str) -> List[str]:
         target = self.config.get("target", {})
@@ -111,6 +216,10 @@ class Runtime:
             argv += ["-i", os.path.expanduser(target["identityFile"])]
         for option in target.get("sshOptions", []):
             argv += ["-o", str(option)]
+        if self.target_password:
+            argv += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]
+        else:
+            argv += ["-o", "BatchMode=yes"]
         return argv + [destination, remote_command]
 
     def start_job(self, command: str, kind: str = "command", name: str = "命令") -> Job:
@@ -127,7 +236,7 @@ class Runtime:
             process = subprocess.Popen(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1, errors="replace", creationflags=flags,
-                start_new_session=(os.name != "nt"),
+                start_new_session=(os.name != "nt"), env=self.command_environment(),
             )
             job.process = process
             def pump(stream: Any, label: str) -> None:
@@ -191,7 +300,8 @@ class Runtime:
         command = render(metric["command"], self.config.get("variables", {}))
         try:
             result = subprocess.run(self.transport_command(command), capture_output=True, text=True,
-                                    timeout=float(metric.get("timeout", 5)), errors="replace")
+                                    timeout=float(metric.get("timeout", 5)), errors="replace",
+                                    env=self.command_environment())
             output = (result.stdout + "\n" + result.stderr).strip()
             parser = metric.get("parser", {"type": "text"})
             parser_type = parser.get("type", "text")
@@ -264,6 +374,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(safe)
         if path == "/api/metrics":
             return self.json_response({"metrics": list(RUNTIME.metrics.values())})
+        if path == "/api/config/profiles":
+            return self.json_response({"profiles": RUNTIME.profiles()})
         if path.startswith("/api/jobs/"):
             parts = path.strip("/").split("/")
             job = RUNTIME.jobs.get(parts[2]) if len(parts) >= 3 else None
@@ -292,6 +404,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(RUNTIME.start_job(command).public(), 201)
             if self.path == "/api/tests":
                 return self.json_response(RUNTIME.run_test(str(data.get("testId", "")), data.get("params", {})).public(), 201)
+            if self.path == "/api/connection/test":
+                mode = RUNTIME.config.get("target", {}).get("transport", "ssh")
+                name = "SSH 连接测试" if mode == "ssh" else "本机连接测试"
+                job = RUNTIME.start_job("printf '__CAMERA_DEBUG_CONNECTED__\\n'", "connection", name)
+                return self.json_response(job.public(), 201)
+            if self.path == "/api/config/target":
+                return self.json_response({"ok": True, "target": RUNTIME.update_target(data)})
+            if self.path == "/api/config/switch":
+                RUNTIME.switch_profile(str(data.get("file", "")))
+                return self.json_response({"ok": True, "configPath": str(RUNTIME.config_path)})
+            if self.path == "/api/config/save":
+                RUNTIME.save_config(data.get("config"))
+                return self.json_response({"ok": True})
             if self.path.endswith("/stop") and self.path.startswith("/api/jobs/"):
                 job_id = self.path.strip("/").split("/")[2]
                 return self.json_response({"stopped": RUNTIME.stop_job(job_id)})
@@ -312,8 +437,16 @@ def main() -> None:
     global RUNTIME
     RUNTIME = Runtime(Path(args.config).expanduser().resolve())
     RUNTIME.start_monitor()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as exc:
+        if exc.errno in (errno.EADDRINUSE, 48, 98, 10048):
+            print(f"Camera Debug Studio 已经在运行: {url}")
+            if not args.no_browser:
+                webbrowser.open(url)
+            return
+        raise
     print(f"Camera Debug Studio: {url}\nConfig: {RUNTIME.config_path}")
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
