@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
+import hashlib
 import json
 import os
 import re
 import signal
+import struct
 import subprocess
 import threading
 import time
@@ -25,6 +28,15 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CONFIG_DIR = ROOT / "configs"
+PROFILE_DIR = CONFIG_DIR / "profiles"
+MODULE_FILES = {
+    "project": "project.json",
+    "target": "target.json",
+    "variables": "variables.json",
+    "monitoring": "monitoring.json",
+    "topology": "topology.json",
+    "tests": "tests.json",
+}
 STATE_LOCK = threading.RLock()
 
 
@@ -32,9 +44,42 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def load_json(path: Path) -> Dict[str, Any]:
+def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def load_profile(path: Path) -> Dict[str, Any]:
+    if path.is_file():
+        return load_json(path)
+    if not path.is_dir():
+        raise ValueError(f"平台配置不存在: {path}")
+    result: Dict[str, Any] = {}
+    defaults: Dict[str, Any] = {"variables": {}, "monitoring": {"metrics": []},
+                                "topology": {"nodes": [], "edges": []}, "tests": []}
+    for key, filename in MODULE_FILES.items():
+        module_path = path / filename
+        if module_path.is_file():
+            result[key] = load_json(module_path)
+        elif key in defaults:
+            result[key] = defaults[key]
+        else:
+            raise ValueError(f"平台配置缺少 {filename}")
+    local_target = path / "target.local.json"
+    if local_target.is_file():
+        override = load_json(local_target)
+        if not isinstance(override, dict):
+            raise ValueError("target.local.json 必须是 JSON 对象")
+        result["target"] = {**result["target"], **override}
+    return result
+
+
+def write_json(path: Path, data: Any) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    temporary.replace(path)
 
 
 def render(template: str, values: Dict[str, Any]) -> str:
@@ -77,21 +122,95 @@ class Job:
             }
 
 
+class TerminalSession:
+    """One persistent PTY-backed local or SSH shell attached to a WebSocket."""
+
+    def __init__(self, runtime: "Runtime", send: Any):
+        if os.name == "nt":
+            raise RuntimeError("PTY 终端当前支持 macOS 和 Linux")
+        self.runtime = runtime
+        self.send = send
+        self.master_fd, slave_fd = os.openpty()
+        self.closed = threading.Event()
+        command = runtime.terminal_command()
+        self.process = subprocess.Popen(
+            command, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            start_new_session=True, close_fds=True,
+            env=runtime.command_environment(),
+        )
+        os.close(slave_fd)
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self) -> None:
+        try:
+            while not self.closed.is_set():
+                chunk = os.read(self.master_fd, 4096)
+                if not chunk:
+                    break
+                self.send({"type": "output", "data": chunk.decode("utf-8", "replace")})
+        except OSError:
+            pass
+        finally:
+            code = self.process.poll()
+            if code is None:
+                code = self.process.wait()
+            if not self.closed.is_set():
+                try:
+                    self.send({"type": "exit", "code": code})
+                except OSError:
+                    pass
+            self.closed.set()
+
+    def input(self, data: str) -> None:
+        if not self.closed.is_set():
+            os.write(self.master_fd, data.encode("utf-8"))
+
+    def resize(self, columns: int, rows: int) -> None:
+        import fcntl
+        import termios
+        columns = max(20, min(400, columns))
+        rows = max(5, min(200, rows))
+        fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+
+    def close(self) -> None:
+        if self.closed.is_set():
+            return
+        self.closed.set()
+        try:
+            os.killpg(self.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            os.close(self.master_fd)
+        except OSError:
+            pass
+
+
 class Runtime:
     def __init__(self, config_path: Path):
         self.config_path = config_path
-        self.config = load_json(config_path)
-        self.target_password = ""
+        self.config = load_profile(config_path)
         self.jobs: Dict[str, Job] = {}
+        self.terminal_sessions: set[TerminalSession] = set()
         self.metrics: Dict[str, Dict[str, Any]] = {}
         self.monitor_stop = threading.Event()
         self.monitor_thread: Optional[threading.Thread] = None
 
     def reload(self) -> None:
-        self.config = load_json(self.config_path)
+        self.config = load_profile(self.config_path)
 
     def profiles(self) -> List[Dict[str, Any]]:
         result = []
+        for path in sorted(PROFILE_DIR.glob("*")):
+            if not path.is_dir():
+                continue
+            try:
+                data = load_profile(path)
+                result.append({"file": path.name, "name": data.get("project", {}).get("name", path.name),
+                               "platform": data.get("project", {}).get("platform", "通用"),
+                               "active": path.resolve() == self.config_path})
+            except (OSError, ValueError):
+                continue
         for path in sorted(CONFIG_DIR.glob("*.json")):
             try:
                 data = load_json(path)
@@ -103,12 +222,14 @@ class Runtime:
         return result
 
     def switch_profile(self, filename: str) -> None:
-        if Path(filename).name != filename or not filename.endswith(".json"):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
             raise ValueError("配置文件名无效")
-        target_path = (CONFIG_DIR / filename).resolve()
-        if CONFIG_DIR.resolve() not in target_path.parents or not target_path.is_file():
+        modular = (PROFILE_DIR / filename).resolve()
+        legacy = (CONFIG_DIR / filename).resolve()
+        target_path = modular if modular.is_dir() else legacy
+        if CONFIG_DIR.resolve() not in target_path.parents or not (target_path.is_dir() or target_path.is_file()):
             raise ValueError("配置文件不存在")
-        data = load_json(target_path)
+        data = load_profile(target_path)
         self.validate_config(data)
         self.config_path = target_path
         self.config = data
@@ -132,16 +253,53 @@ class Runtime:
             if metric["id"] in ids:
                 raise ValueError(f"监控指标 id 重复: {metric['id']}")
             ids.add(metric["id"])
+        topology = data.get("topology")
+        if topology is not None:
+            if not isinstance(topology, dict) or not isinstance(topology.get("nodes"), list) or not isinstance(topology.get("edges"), list):
+                raise ValueError("topology.nodes 和 topology.edges 必须是数组")
+            node_ids = {node.get("id") for node in topology["nodes"] if isinstance(node, dict)}
+            if None in node_ids or len(node_ids) != len(topology["nodes"]):
+                raise ValueError("拓扑节点必须包含不重复的 id")
+            if any(not re.fullmatch(r"[A-Za-z0-9_-]+", str(node_id)) for node_id in node_ids):
+                raise ValueError("拓扑节点 id 只能包含字母、数字、下划线和连字符")
+            for node in topology["nodes"]:
+                try:
+                    x, y = float(node.get("x")), float(node.get("y"))
+                except (TypeError, ValueError):
+                    raise ValueError("拓扑节点必须包含数值坐标 x 和 y")
+                if not 0 <= x <= 100 or not 0 <= y <= 100:
+                    raise ValueError("拓扑节点坐标必须在 0 到 100 之间")
+            for edge in topology["edges"]:
+                if not isinstance(edge, dict) or edge.get("from") not in node_ids or edge.get("to") not in node_ids:
+                    raise ValueError("拓扑连接引用了不存在的节点")
 
     def save_config(self, data: Dict[str, Any]) -> None:
         self.validate_config(data)
-        temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-        temporary.replace(self.config_path)
+        if self.config_path.is_dir():
+            for key, filename in MODULE_FILES.items():
+                value = data.get(key, {} if key != "tests" else [])
+                if key == "target":
+                    self.write_target(value)
+                else:
+                    write_json(self.config_path / filename, value)
+        else:
+            write_json(self.config_path, data)
         self.config = data
         self.metrics.clear()
+
+    def write_target(self, target: Dict[str, Any]) -> None:
+        if not self.config_path.is_dir():
+            return
+        public_target = dict(target)
+        password = str(public_target.pop("password", ""))
+        write_json(self.config_path / MODULE_FILES["target"], public_target)
+        local_target = self.config_path / "target.local.json"
+        if password or local_target.exists():
+            write_json(local_target, {"password": password})
+            try:
+                local_target.chmod(0o600)
+            except OSError:
+                pass
 
     def update_target(self, values: Dict[str, Any]) -> Dict[str, Any]:
         mode = str(values.get("transport", "ssh"))
@@ -166,30 +324,26 @@ class Runtime:
                 raise ValueError("端口或超时时间超出范围")
             target.update({"host": host, "user": user, "port": port,
                            "connectTimeout": timeout, "identityFile": identity})
-            password = str(values.get("password", ""))
-            if password:
-                self.target_password = password
-            elif values.get("clearPassword"):
-                self.target_password = ""
+            target["password"] = str(values.get("password", ""))
             target["sshOptions"] = ["StrictHostKeyChecking=accept-new"]
         else:
             target["localShell"] = str(values.get("localShell", target.get("localShell", "/bin/sh")))
         self.config["target"] = target
-        temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(self.config, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-        temporary.replace(self.config_path)
+        if self.config_path.is_dir():
+            self.write_target(target)
+        else:
+            write_json(self.config_path, self.config)
         self.metrics.clear()
         return target
 
     def command_environment(self) -> Dict[str, str]:
         environment = dict(os.environ)
-        if self.config.get("target", {}).get("transport") == "ssh" and self.target_password:
+        password = str(self.config.get("target", {}).get("password", ""))
+        if self.config.get("target", {}).get("transport") == "ssh" and password:
             environment.update({
                 "SSH_ASKPASS": str(ROOT / "ssh_askpass.py"),
                 "SSH_ASKPASS_REQUIRE": "force",
-                "CAMERA_DEBUG_SSH_PASSWORD": self.target_password,
+                "CAMERA_DEBUG_SSH_PASSWORD": password,
                 "DISPLAY": environment.get("DISPLAY", "camera-debug:0"),
             })
         return environment
@@ -216,11 +370,38 @@ class Runtime:
             argv += ["-i", os.path.expanduser(target["identityFile"])]
         for option in target.get("sshOptions", []):
             argv += ["-o", str(option)]
-        if self.target_password:
+        if target.get("password"):
             argv += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]
         else:
             argv += ["-o", "BatchMode=yes"]
         return argv + [destination, remote_command]
+
+    def terminal_command(self) -> List[str]:
+        """Build a persistent interactive shell command for a PTY session."""
+        target = self.config.get("target", {})
+        mode = target.get("transport", "ssh")
+        if mode == "local":
+            shell = target.get("localShell") or os.environ.get("SHELL", "/bin/sh")
+            return [shell, "-l"]
+        if mode != "ssh":
+            raise ValueError(f"不支持的 transport: {mode}")
+        host = target.get("host", "")
+        if not host:
+            raise ValueError("SSH host 未配置")
+        user = target.get("user", "")
+        destination = f"{user}@{host}" if user else host
+        argv = [target.get("sshBinary", "ssh"), "-tt", "-p", str(target.get("port", 22))]
+        argv += ["-o", f"ConnectTimeout={int(target.get('connectTimeout', 8))}"]
+        argv += ["-o", "ServerAliveInterval=15"]
+        if target.get("identityFile"):
+            argv += ["-i", os.path.expanduser(target["identityFile"])]
+        for option in target.get("sshOptions", []):
+            argv += ["-o", str(option)]
+        if target.get("password"):
+            argv += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]
+        else:
+            argv += ["-o", "BatchMode=yes"]
+        return argv + [destination]
 
     def start_job(self, command: str, kind: str = "command", name: str = "命令") -> Job:
         job = Job(uuid.uuid4().hex[:12], kind, name, command)
@@ -348,6 +529,7 @@ RUNTIME: Runtime
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "CameraDebugStudio/0.1"
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -365,9 +547,87 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length) or b"{}")
 
+    def websocket_send(self, payload: Dict[str, Any], opcode: int = 1) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        length = len(body)
+        header = bytes([0x80 | opcode])
+        if length < 126:
+            header += bytes([length])
+        elif length < 65536:
+            header += bytes([126]) + struct.pack("!H", length)
+        else:
+            header += bytes([127]) + struct.pack("!Q", length)
+        self.connection.sendall(header + body)
+
+    def websocket_read(self) -> Optional[Dict[str, Any]]:
+        first = self.rfile.read(2)
+        if len(first) != 2:
+            return None
+        opcode, length = first[0] & 0x0F, first[1] & 0x7F
+        masked = bool(first[1] & 0x80)
+        if length == 126:
+            length = struct.unpack("!H", self.rfile.read(2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", self.rfile.read(8))[0]
+        if length > 1024 * 1024:
+            raise ValueError("WebSocket 消息过大")
+        mask = self.rfile.read(4) if masked else b""
+        payload = self.rfile.read(length)
+        if masked:
+            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        if opcode == 8:
+            return None
+        if opcode == 9:
+            self.connection.sendall(b"\x8a" + bytes([len(payload)]) + payload)
+            return {}
+        if opcode != 1:
+            return {}
+        return json.loads(payload.decode("utf-8"))
+
+    def terminal_websocket(self) -> None:
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key or self.headers.get("Upgrade", "").lower() != "websocket":
+            return self.json_response({"error": "需要 WebSocket Upgrade"}, 426)
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        send_lock = threading.Lock()
+        def send(payload: Dict[str, Any]) -> None:
+            with send_lock:
+                self.websocket_send(payload)
+        session: Optional[TerminalSession] = None
+        try:
+            session = TerminalSession(RUNTIME, send)
+            with STATE_LOCK:
+                RUNTIME.terminal_sessions.add(session)
+            send({"type": "ready", "transport": RUNTIME.config.get("target", {}).get("transport", "ssh")})
+            while not session.closed.is_set():
+                message = self.websocket_read()
+                if message is None:
+                    break
+                if message.get("type") == "input":
+                    session.input(str(message.get("data", "")))
+                elif message.get("type") == "resize":
+                    session.resize(int(message.get("columns", 100)), int(message.get("rows", 30)))
+        except Exception as exc:
+            try:
+                send({"type": "error", "message": str(exc)})
+            except OSError:
+                pass
+        finally:
+            if session:
+                session.close()
+                with STATE_LOCK:
+                    RUNTIME.terminal_sessions.discard(session)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/ws/terminal":
+            return self.terminal_websocket()
         if path == "/api/config":
             safe = dict(RUNTIME.config)
             safe["configPath"] = str(RUNTIME.config_path)
@@ -376,6 +636,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"metrics": list(RUNTIME.metrics.values())})
         if path == "/api/config/profiles":
             return self.json_response({"profiles": RUNTIME.profiles()})
+        if path == "/api/manual":
+            manual = ROOT / "docs" / "用户手册.md"
+            if not manual.is_file():
+                return self.json_response({"error": "用户手册不存在"}, 404)
+            return self.json_response({"content": manual.read_text(encoding="utf-8")})
         if path.startswith("/api/jobs/"):
             parts = path.strip("/").split("/")
             job = RUNTIME.jobs.get(parts[2]) if len(parts) >= 3 else None
@@ -429,7 +694,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Camera Debug Studio")
-    parser.add_argument("--config", default=str(CONFIG_DIR / "demo-local.json"))
+    parser.add_argument("--config", default=str(PROFILE_DIR / "demo-local"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
@@ -453,7 +718,12 @@ def main() -> None:
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally:
-        RUNTIME.monitor_stop.set(); server.server_close()
+        RUNTIME.monitor_stop.set()
+        with STATE_LOCK:
+            sessions = list(RUNTIME.terminal_sessions)
+        for session in sessions:
+            session.close()
+        server.server_close()
 
 
 if __name__ == "__main__":

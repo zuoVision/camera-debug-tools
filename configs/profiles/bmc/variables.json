@@ -1,0 +1,7 @@
+{
+  "controller": 1,
+  "channel": 1,
+  "device": "0x52",
+  "link_reg": "0x1A",
+  "video_reg": "0x1fd"
+}

@@ -1,0 +1,12 @@
+{
+  "transport": "ssh",
+  "host": "192.168.1.1",
+  "port": 22,
+  "user": "root",
+  "password": "",
+  "connectTimeout": 8,
+  "identityFile": "",
+  "sshOptions": [
+    "StrictHostKeyChecking=accept-new"
+  ]
+}

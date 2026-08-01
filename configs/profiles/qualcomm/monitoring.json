@@ -1,0 +1,44 @@
+{
+  "metrics": [
+    {
+      "id": "link_lock",
+      "name": "Link Lock",
+      "group": "Camera 0",
+      "command": "i2cdbgr r {bus} {device} {link_reg}",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "(?:0x)?([0-9a-fA-F]+)\\s*$",
+        "group": 1,
+        "map": {
+          "1": "LOCKED",
+          "0": "UNLOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      }
+    },
+    {
+      "id": "video_lock",
+      "name": "Video Lock",
+      "group": "Camera 0",
+      "command": "i2cdbgr r {bus} {device} {video_reg}",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "(?:0x)?([0-9a-fA-F]+)\\s*$",
+        "group": 1
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "1"
+        ]
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenSSH askpass helper. The password exists only in the child environment."""
+"""OpenSSH askpass helper. The configured password is passed through the child environment."""
 
 import os
 import sys

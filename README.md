@@ -5,6 +5,7 @@
 面向不同芯片平台和项目的配置化相机调试工具。当前提供：
 
 - SSH 密码/私钥认证与 Local 可替换传输层
+- WebSocket + PTY 持久交互终端，保留工作目录和 Shell 环境
 - 类终端命令执行与实时 stdout/stderr
 - Link Lock、Video Lock、FPS 等配置化监控卡片
 - 测试项选择、脚本预览、参数化运行、实时日志和停止
@@ -22,15 +23,27 @@ python3 camera_debug.py
 默认打开本机演示环境。使用平台示例：
 
 ```bash
-python3 camera_debug.py --config configs/qualcomm-example.json
-python3 camera_debug.py --config configs/bmc-example.json
+python3 camera_debug.py --config configs/profiles/qualcomm
+python3 camera_debug.py --config configs/profiles/bmc
 ```
 
 服务默认仅监听 `127.0.0.1:8765`。如需让局域网访问，可显式传入 `--host 0.0.0.0`，并自行增加访问控制。
 
 ## 配置模型
 
-配置文件的核心层次：
+每个平台使用独立目录，各功能模块分别保存：
+
+```text
+configs/profiles/<平台>/
+├── project.json
+├── target.json
+├── variables.json
+├── monitoring.json
+├── topology.json
+└── tests.json
+```
+
+模块的核心层次：
 
 ```text
 target       -> transport、主机、端口、用户、密钥、SSH 参数
@@ -57,4 +70,4 @@ tests        -> 测试脚本命令模板和用户参数
 
 ## 安全说明
 
-这是开发调试工具，命令和测试脚本拥有目标板用户的权限。仅在可信网络使用，并优先采用 SSH 密钥；配置中不要保存密码。Web 服务不直接接受 SSH 密码，也不会将凭据返回给前端。
+这是开发调试工具，命令和测试脚本拥有目标板用户的权限。SSH 密码会以明文保存在被 Git 忽略的 `target.local.json`，并覆盖公共 `target.json`；仅在可信网络使用，限制文件权限，生产环境优先采用 SSH 密钥。

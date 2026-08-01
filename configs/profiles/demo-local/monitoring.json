@@ -1,0 +1,27 @@
+{
+  "metrics": [
+    {
+      "id": "camera_ping",
+      "name": "Camera Host",
+      "group": "192.168.31.5",
+      "command": "ping -c 1 192.168.31.5",
+      "interval": 3,
+      "timeout": 3,
+      "parser": {
+        "type": "regex",
+        "pattern": "(1 packets received|1 received)",
+        "group": 1,
+        "map": {
+          "1 packets received": "ONLINE",
+          "1 received": "ONLINE"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ONLINE"
+        ]
+      }
+    }
+  ]
+}

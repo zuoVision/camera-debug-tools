@@ -1,0 +1,6 @@
+{
+  "bus": 1,
+  "device": "0x52",
+  "link_reg": "0x0013",
+  "video_reg": "0x0022"
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "camera_test",
+    "name": "相机测试脚本",
+    "description": "远端运行项目测试脚本",
+    "command": "/opt/camera/tests/run.sh --camera {camera}",
+    "params": [
+      {
+        "name": "camera",
+        "label": "Camera ID",
+        "type": "number",
+        "default": 0
+      }
+    ]
+  }
+]

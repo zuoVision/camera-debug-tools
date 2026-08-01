@@ -1,0 +1,13 @@
+{
+  "transport": "ssh",
+  "localShell": "/bin/sh",
+  "host": "192.168.31.3",
+  "user": "zuozhe",
+  "port": 22,
+  "password": "",
+  "connectTimeout": 8,
+  "identityFile": "",
+  "sshOptions": [
+    "StrictHostKeyChecking=accept-new"
+  ]
+}
