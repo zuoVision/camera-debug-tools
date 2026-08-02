@@ -5,7 +5,7 @@
 面向不同芯片平台和项目的配置化相机调试工具。当前提供：
 
 - SSH 密码/私钥认证与 Local 可替换传输层
-- WebSocket + PTY 持久交互终端，保留工作目录和 Shell 环境
+- WebSocket 持久交互终端：macOS/Linux 使用 PTY，Windows 使用系统 OpenSSH/持久 Shell 管道
 - 类终端命令执行与实时 stdout/stderr
 - Link Lock、Video Lock、FPS 等配置化监控卡片
 - 测试项选择、脚本预览、参数化运行、实时日志和停止
