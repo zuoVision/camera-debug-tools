@@ -1,20 +1,19 @@
 {
   "metrics": [
     {
-      "id": "link_lock",
-      "name": "Link Lock",
+      "id": "cam0_link_lock",
+      "name": "Cam0 Link",
       "group": "Camera 0",
-      "command": "csi i2c {controller} {channel} {device} {link_reg}",
+      "command": "sh -lc 'csi i2c 2 2 0xD6 0x1A'",
       "interval": 2,
       "parser": {
         "type": "regex",
-        "pattern": "(?:value|data)[=: ]+(0x[0-9a-fA-F]+|\\d+)",
+        "pattern": "\\[0x[0-9a-fA-F]+\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
         "group": 1,
+        "bit": 3,
         "map": {
-          "0": "UNLOCKED",
-          "1": "LOCKED",
-          "0x1": "LOCKED",
-          "0x0": "UNLOCKED"
+          "0": "LOST",
+          "1": "LOCKED"
         }
       },
       "display": {
@@ -22,26 +21,34 @@
         "goodValues": [
           "LOCKED"
         ]
-      }
+      },
+      "enabled": true,
+      "timeout": 10
     },
     {
-      "id": "video_lock",
-      "name": "Video Lock",
+      "id": "cam0_video_lock",
+      "name": "Cam0 Video",
       "group": "Camera 0",
-      "command": "csi i2c {controller} {channel} {device} {video_reg}",
+      "command": "sh -lc 'csi i2c 2 2 0xD6 0x1dc'",
       "interval": 2,
       "parser": {
         "type": "regex",
-        "pattern": "(?:value|data)[=: ]+(0x[0-9a-fA-F]+|\\d+)",
-        "group": 1
+        "pattern": "\\[0x[0-9a-fA-F]+\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
       },
       "display": {
         "kind": "status",
         "goodValues": [
-          "0x1",
-          "1"
+          "LOCKED"
         ]
-      }
+      },
+      "enabled": true,
+      "timeout": 10
     }
   ]
 }
