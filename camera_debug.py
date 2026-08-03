@@ -14,6 +14,7 @@ import re
 import signal
 import struct
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -30,6 +31,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CONFIG_DIR = ROOT / "configs"
 PROFILE_DIR = CONFIG_DIR / "profiles"
+TEST_DIR = ROOT / "test"
 MODULE_FILES = {
     "project": "project.json",
     "target": "target.json",
@@ -105,6 +107,8 @@ class Job:
     exit_code: Optional[int] = None
     lines: List[Dict[str, Any]] = field(default_factory=list)
     process: Optional[subprocess.Popen] = None
+    argv: Optional[List[str]] = None
+    cwd: Optional[str] = None
 
     def append(self, stream: str, text: str) -> None:
         with STATE_LOCK:
@@ -478,14 +482,59 @@ class Runtime:
         threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
         return job
 
+    def collect_pytest(self) -> Dict[str, Any]:
+        TEST_DIR.mkdir(exist_ok=True)
+        python = self.pytest_python()
+        argv = [python, "-m", "pytest", "--collect-only", "-q", TEST_DIR.name]
+        try:
+            result = subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True,
+                                    timeout=30, errors="replace")
+        except subprocess.TimeoutExpired:
+            raise ValueError("Pytest 用例收集超时（30 秒）")
+        output = (result.stdout + "\n" + result.stderr).strip()
+        if "No module named pytest" in output:
+            raise ValueError(f"Pytest Python 未安装 pytest，请执行：{python} -m pip install pytest")
+        node_ids = []
+        for line in result.stdout.splitlines():
+            node_id = line.strip()
+            if "::" in node_id and node_id.startswith(("test/", "test\\")):
+                node_ids.append(node_id.replace("\\", "/"))
+        return {"items": node_ids, "count": len(node_ids), "output": output,
+                "available": result.returncode in (0, 5)}
+
+    def start_pytest(self, node_id: str) -> Job:
+        collected = self.collect_pytest()
+        if node_id not in collected["items"]:
+            raise ValueError("未知或已变化的 Pytest 用例，请刷新用例列表")
+        argv = [self.pytest_python(), "-m", "pytest", "-v", "--color=no", node_id]
+        job = Job(uuid.uuid4().hex[:12], "pytest", f"Pytest · {node_id}",
+                  " ".join(argv), argv=argv, cwd=str(ROOT))
+        with STATE_LOCK:
+            self.jobs[job.id] = job
+        threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
+        return job
+
+    @staticmethod
+    def pytest_python() -> str:
+        configured = os.environ.get("CAMERA_DEBUG_PYTEST_PYTHON", "").strip()
+        candidates = [configured] if configured else []
+        if os.name == "nt":
+            candidates += [str(TEST_DIR / ".venv" / "Scripts" / "python.exe"),
+                           str(ROOT / ".venv" / "Scripts" / "python.exe")]
+        else:
+            candidates += [str(TEST_DIR / ".venv" / "bin" / "python"),
+                           str(ROOT / ".venv" / "bin" / "python")]
+        return next((path for path in candidates if path and Path(path).is_file()), sys.executable)
+
     def _run_job(self, job: Job) -> None:
         try:
-            argv = self.transport_command(job.command)
+            argv = job.argv or self.transport_command(job.command)
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             process = subprocess.Popen(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1, errors="replace", creationflags=flags,
                 start_new_session=(os.name != "nt"), env=self.command_environment(),
+                cwd=job.cwd,
             )
             job.process = process
             def pump(stream: Any, label: str) -> None:
@@ -704,6 +753,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"metrics": list(RUNTIME.metrics.values())})
         if path == "/api/config/profiles":
             return self.json_response({"profiles": RUNTIME.profiles()})
+        if path == "/api/pytest/collect":
+            try:
+                return self.json_response(RUNTIME.collect_pytest())
+            except ValueError as exc:
+                return self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         if path == "/api/manual":
             manual = ROOT / "docs" / "用户手册.md"
             if not manual.is_file():
@@ -737,6 +791,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(RUNTIME.start_job(command).public(), 201)
             if self.path == "/api/tests":
                 return self.json_response(RUNTIME.run_test(str(data.get("testId", "")), data.get("params", {})).public(), 201)
+            if self.path == "/api/pytest/run":
+                return self.json_response(RUNTIME.start_pytest(str(data.get("nodeId", ""))).public(), 201)
             if self.path == "/api/connection/test":
                 mode = RUNTIME.config.get("target", {}).get("transport", "ssh")
                 name = "SSH 连接测试" if mode == "ssh" else "本机连接测试"

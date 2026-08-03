@@ -1,10 +1,10 @@
 {
   "metrics": [
     {
-      "id": "camera_ping",
-      "name": "Camera Host",
-      "group": "192.168.31.5",
-      "command": "ping -c 1 192.168.31.5",
+      "id": "Cam0",
+      "name": "FWC",
+      "group": "192.168.31.1",
+      "command": "ping -c 1 192.168.31.1",
       "interval": 3,
       "timeout": 3,
       "parser": {
@@ -20,6 +20,43 @@
         "kind": "status",
         "goodValues": [
           "ONLINE"
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "id": "Cam1",
+      "name": "FNC",
+      "group": "Inst 0",
+      "command": "echo 1",
+      "enabled": true,
+      "interval": 3,
+      "timeout": 5,
+      "parser": {
+        "type": "text"
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "1"
+        ]
+      }
+    },
+    {
+      "id": "Cam2",
+      "name": "RC",
+      "group": "Inst 0",
+      "command": "echo 0",
+      "enabled": true,
+      "interval": 2,
+      "timeout": 5,
+      "parser": {
+        "type": "text"
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "1"
         ]
       }
     }
