@@ -399,8 +399,14 @@ class Runtime:
         environment = dict(os.environ)
         password = str(self.config.get("target", {}).get("password", ""))
         if self.config.get("target", {}).get("transport") == "ssh" and password:
+            askpass_script = str(ROOT / "ssh_askpass.py")
+            # Windows OpenSSH uses CreateProcess for SSH_ASKPASS and cannot
+            # execute a .py file directly. Include the running interpreter so
+            # password authentication works regardless of file associations.
+            askpass = (subprocess.list2cmdline([sys.executable, askpass_script])
+                       if os.name == "nt" else askpass_script)
             environment.update({
-                "SSH_ASKPASS": str(ROOT / "ssh_askpass.py"),
+                "SSH_ASKPASS": askpass,
                 "SSH_ASKPASS_REQUIRE": "force",
                 "CAMERA_DEBUG_SSH_PASSWORD": password,
                 "DISPLAY": environment.get("DISPLAY", "camera-debug:0"),
