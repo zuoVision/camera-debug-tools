@@ -95,6 +95,28 @@ def render(template: str, values: Dict[str, Any]) -> str:
     return re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, template)
 
 
+def apply_parser_transforms(value: Any, parser: Dict[str, Any]) -> Any:
+    """Apply optional transformations after extraction and before mapping."""
+    if "bit" not in parser:
+        return value
+    bit = parser["bit"]
+    if isinstance(bit, bool) or not isinstance(bit, int) or not 0 <= bit <= 63:
+        raise ValueError("parser.bit must be an integer from 0 to 63")
+    if isinstance(value, int):
+        numeric_value = value
+    elif isinstance(value, float) and value.is_integer():
+        numeric_value = int(value)
+    else:
+        raw_value = str(value).strip()
+        try:
+            numeric_value = int(raw_value, 0)
+        except ValueError:
+            # Base 0 rejects decimal strings with leading zeroes; those are
+            # still valid decimal register output.
+            numeric_value = int(raw_value, 10)
+    return (numeric_value >> bit) & 1
+
+
 @dataclass
 class Job:
     id: str
@@ -311,6 +333,11 @@ class Runtime:
                 raise ValueError("每个监控指标必须包含 id 和 command")
             if metric["id"] in ids:
                 raise ValueError(f"监控指标 id 重复: {metric['id']}")
+            parser = metric.get("parser", {})
+            if "bit" in parser:
+                bit = parser["bit"]
+                if isinstance(bit, bool) or not isinstance(bit, int) or not 0 <= bit <= 63:
+                    raise ValueError(f"监控指标 {metric['id']} 的 parser.bit 必须是 0 到 63 的整数")
             ids.add(metric["id"])
         topology = data.get("topology")
         if topology is not None:
@@ -621,6 +648,7 @@ class Runtime:
                 value = float(match.group(0))
             else:
                 value = output
+            value = apply_parser_transforms(value, parser)
             mapping = parser.get("map", {})
             value = mapping.get(str(value), value)
             return {"id": metric["id"], "value": value, "ok": result.returncode == 0,

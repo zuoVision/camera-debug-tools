@@ -3,38 +3,34 @@
     {
       "id": "cam0",
       "type": "camera",
-      "label": "CAM 0",
-      "x": 10,
-      "y": 14
-    },
-    {
-      "id": "cam1",
-      "type": "camera",
-      "label": "CAM 1",
-      "x": 10,
-      "y": 34
+      "label": "CAM5",
+      "x": 11,
+      "y": 5,
+      "subtitle": ""
     },
     {
       "id": "cam2",
       "type": "camera",
-      "label": "CAM 2",
-      "x": 10,
-      "y": 54
+      "label": "CAM7",
+      "x": 11,
+      "y": 19,
+      "subtitle": ""
     },
     {
       "id": "cam3",
       "type": "camera",
-      "label": "CAM 3",
-      "x": 10,
-      "y": 74
+      "label": "CAM8",
+      "x": 11,
+      "y": 26,
+      "subtitle": ""
     },
     {
       "id": "des0",
       "type": "deserializer",
       "label": "DES0",
-      "subtitle": "MAX96712",
+      "subtitle": "MAX96724",
       "x": 48,
-      "y": 44
+      "y": 17
     },
     {
       "id": "soc",
@@ -42,37 +38,102 @@
       "label": "SoC",
       "subtitle": "CSI / ISP",
       "x": 86,
-      "y": 44
+      "y": 46,
+      "width": 116,
+      "height": 260
     },
     {
-      "id": "bypass",
-      "type": "serializer",
-      "label": "MAX96717",
-      "subtitle": "bypass",
-      "x": 48,
-      "y": 84
-    },
-    {
-      "id": "aux",
+      "id": "node1",
       "type": "camera",
-      "label": "AUX",
-      "x": 10,
-      "y": 90
+      "label": "CAM6",
+      "x": 11,
+      "y": 12,
+      "subtitle": ""
+    },
+    {
+      "id": "node2",
+      "type": "deserializer",
+      "label": "DES1",
+      "x": 48,
+      "y": 44,
+      "subtitle": "MAX96712"
+    },
+    {
+      "id": "node3",
+      "type": "camera",
+      "label": "Cam9",
+      "x": 11,
+      "y": 34,
+      "subtitle": ""
+    },
+    {
+      "id": "node4",
+      "type": "camera",
+      "label": "Cam10",
+      "x": 11,
+      "y": 41,
+      "subtitle": ""
+    },
+    {
+      "id": "node5",
+      "type": "camera",
+      "label": "Cam11",
+      "x": 11,
+      "y": 48,
+      "subtitle": ""
+    },
+    {
+      "id": "node6",
+      "type": "camera",
+      "label": "Cam12",
+      "x": 11,
+      "y": 55,
+      "subtitle": ""
+    },
+    {
+      "id": "node7",
+      "type": "deserializer",
+      "label": "DES2",
+      "x": 47,
+      "y": 72,
+      "subtitle": "MAX96712"
+    },
+    {
+      "id": "node8",
+      "type": "camera",
+      "label": "CAM0",
+      "x": 11,
+      "y": 63,
+      "subtitle": "imx728_f120",
+      "width": 88,
+      "height": 88
+    },
+    {
+      "id": "node9",
+      "type": "camera",
+      "label": "Cam1",
+      "x": 11,
+      "y": 70,
+      "subtitle": "imx728"
+    },
+    {
+      "id": "node11",
+      "type": "camera",
+      "label": "4DRadar",
+      "x": 11,
+      "y": 84,
+      "subtitle": ""
+    },
+    {
+      "id": "node12",
+      "type": "camera",
+      "label": "Cam2",
+      "x": 11,
+      "y": 77,
+      "subtitle": ""
     }
   ],
   "edges": [
-    {
-      "from": "cam0",
-      "to": "des0",
-      "linkMetric": "link_lock",
-      "videoMetric": "video_lock"
-    },
-    {
-      "from": "cam1",
-      "to": "des0",
-      "linkMetric": "cam1_link",
-      "videoMetric": "cam1_video"
-    },
     {
       "from": "cam2",
       "to": "des0",
@@ -86,22 +147,63 @@
       "videoMetric": "cam3_video"
     },
     {
-      "from": "des0",
-      "to": "soc",
-      "linkMetric": "des_soc_link",
-      "videoMetric": "des_soc_video"
-    },
-    {
-      "from": "aux",
-      "to": "bypass",
-      "linkMetric": "aux_link",
-      "videoMetric": "aux_video"
-    },
-    {
-      "from": "bypass",
+      "from": "cam0",
       "to": "des0",
-      "linkMetric": "bypass_link",
-      "videoMetric": "bypass_video"
+      "linkMetric": "Cam0",
+      "videoMetric": "Cam0"
+    },
+    {
+      "from": "node1",
+      "to": "des0",
+      "linkMetric": "Cam1",
+      "videoMetric": "Cam1"
+    },
+    {
+      "from": "node2",
+      "to": "soc"
+    },
+    {
+      "from": "des0",
+      "to": "soc"
+    },
+    {
+      "from": "node3",
+      "to": "node2"
+    },
+    {
+      "from": "node4",
+      "to": "node2"
+    },
+    {
+      "from": "node5",
+      "to": "node2"
+    },
+    {
+      "from": "node6",
+      "to": "node2"
+    },
+    {
+      "from": "node7",
+      "to": "soc"
+    },
+    {
+      "from": "node9",
+      "to": "node7"
+    },
+    {
+      "from": "node11",
+      "to": "node7"
+    },
+    {
+      "from": "node12",
+      "to": "node7"
+    },
+    {
+      "from": "node8",
+      "to": "node7",
+      "linkMetric": "cam0_link_lock",
+      "videoMetric": "cam0_video_lock"
     }
-  ]
+  ],
+  "height": 1420
 }
