@@ -1,209 +1,251 @@
 {
   "nodes": [
     {
-      "id": "cam0",
+      "id": "g0_p0",
       "type": "camera",
-      "label": "CAM5",
-      "x": 11,
-      "y": 5,
-      "subtitle": ""
+      "label": "CAM5 \u00b7 \u53f3\u540e",
+      "subtitle": "OX03C10 \u00b7 G0/P0",
+      "x": 6,
+      "y": 7,
+      "width": 100,
+      "height": 54
     },
     {
-      "id": "cam2",
+      "id": "g0_p1",
       "type": "camera",
-      "label": "CAM7",
-      "x": 11,
+      "label": "CAM6 \u00b7 \u5de6\u540e",
+      "subtitle": "OX03C10 \u00b7 G0/P1",
+      "x": 6,
       "y": 19,
-      "subtitle": ""
+      "width": 100,
+      "height": 54
     },
     {
-      "id": "cam3",
+      "id": "g0_p2",
       "type": "camera",
-      "label": "CAM8",
-      "x": 11,
-      "y": 26,
-      "subtitle": ""
+      "label": "CAM7 \u00b7 \u5de6\u524d",
+      "subtitle": "OX03C10 \u00b7 G0/P2",
+      "x": 6,
+      "y": 31,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g0_p3",
+      "type": "camera",
+      "label": "CAM8 \u00b7 \u53f3\u524d",
+      "subtitle": "OX03C10 \u00b7 G0/P3",
+      "x": 6,
+      "y": 43,
+      "width": 100,
+      "height": 54
     },
     {
       "id": "des0",
       "type": "deserializer",
-      "label": "DES0",
-      "subtitle": "MAX96724",
-      "x": 48,
-      "y": 17
+      "label": "DES0 \u00b7 \u5468\u89c6",
+      "subtitle": "MAX96724 \u00b7 0x4E",
+      "x": 27,
+      "y": 25,
+      "width": 112,
+      "height": 60
+    },
+    {
+      "id": "g1_p0",
+      "type": "camera",
+      "label": "CAM9 \u00b7 \u540e\u9c7c\u773c",
+      "subtitle": "ISX031 \u00b7 G1/P0",
+      "x": 94,
+      "y": 32,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g1_p1",
+      "type": "camera",
+      "label": "CAM10 \u00b7 \u5de6\u9c7c\u773c",
+      "subtitle": "ISX031 \u00b7 G1/P1",
+      "x": 94,
+      "y": 44,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g1_p2",
+      "type": "camera",
+      "label": "CAM11 \u00b7 \u524d\u9c7c\u773c",
+      "subtitle": "ISX031 \u00b7 G1/P2",
+      "x": 94,
+      "y": 56,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g1_p3",
+      "type": "camera",
+      "label": "CAM12 \u00b7 \u53f3\u9c7c\u773c",
+      "subtitle": "ISX031 \u00b7 G1/P3",
+      "x": 94,
+      "y": 68,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "des1",
+      "type": "deserializer",
+      "label": "DES1 \u00b7 \u73af\u89c6",
+      "subtitle": "MAX96712 \u00b7 0x52",
+      "x": 73,
+      "y": 50,
+      "width": 112,
+      "height": 60
+    },
+    {
+      "id": "g2_p0",
+      "type": "camera",
+      "label": "CAM0 \u00b7 \u524d\u8fdc",
+      "subtitle": "OX08D10 F30 \u00b7 G2/P0",
+      "x": 6,
+      "y": 57,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g2_p1",
+      "type": "camera",
+      "label": "CAM1 \u00b7 \u524d\u5e7f",
+      "subtitle": "OX08D10 F120 \u00b7 G2/P1",
+      "x": 6,
+      "y": 69,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g2_p2",
+      "type": "camera",
+      "label": "CAM2 \u00b7 \u540e\u4e2d",
+      "subtitle": "OX03C10 F60 \u00b7 G2/P2",
+      "x": 6,
+      "y": 81,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "g2_p3",
+      "type": "radar",
+      "label": "4D Radar \u00b7 \u524d\u96f7\u8fbe",
+      "subtitle": "8T8R LUX \u00b7 G2/P3",
+      "x": 6,
+      "y": 93,
+      "width": 100,
+      "height": 54
+    },
+    {
+      "id": "des2",
+      "type": "deserializer",
+      "label": "DES2 \u00b7 \u8fdc\u96f7",
+      "subtitle": "MAX96712 \u00b7 0xD6",
+      "x": 27,
+      "y": 75,
+      "width": 112,
+      "height": 60
     },
     {
       "id": "soc",
       "type": "soc",
-      "label": "SoC",
-      "subtitle": "CSI / ISP",
-      "x": 86,
-      "y": 46,
-      "width": 116,
-      "height": 260
-    },
-    {
-      "id": "node1",
-      "type": "camera",
-      "label": "CAM6",
-      "x": 11,
-      "y": 12,
-      "subtitle": ""
-    },
-    {
-      "id": "node2",
-      "type": "deserializer",
-      "label": "DES1",
-      "x": 48,
-      "y": 44,
-      "subtitle": "MAX96712"
-    },
-    {
-      "id": "node3",
-      "type": "camera",
-      "label": "Cam9",
-      "x": 11,
-      "y": 34,
-      "subtitle": ""
-    },
-    {
-      "id": "node4",
-      "type": "camera",
-      "label": "Cam10",
-      "x": 11,
-      "y": 41,
-      "subtitle": ""
-    },
-    {
-      "id": "node5",
-      "type": "camera",
-      "label": "Cam11",
-      "x": 11,
-      "y": 48,
-      "subtitle": ""
-    },
-    {
-      "id": "node6",
-      "type": "camera",
-      "label": "Cam12",
-      "x": 11,
-      "y": 55,
-      "subtitle": ""
-    },
-    {
-      "id": "node7",
-      "type": "deserializer",
-      "label": "DES2",
-      "x": 47,
-      "y": 72,
-      "subtitle": "MAX96712"
-    },
-    {
-      "id": "node8",
-      "type": "camera",
-      "label": "CAM0",
-      "x": 11,
-      "y": 63,
-      "subtitle": "imx728_f120",
-      "width": 88,
-      "height": 88
-    },
-    {
-      "id": "node9",
-      "type": "camera",
-      "label": "Cam1",
-      "x": 11,
-      "y": 70,
-      "subtitle": "imx728"
-    },
-    {
-      "id": "node11",
-      "type": "camera",
-      "label": "4DRadar",
-      "x": 11,
-      "y": 84,
-      "subtitle": ""
-    },
-    {
-      "id": "node12",
-      "type": "camera",
-      "label": "Cam2",
-      "x": 11,
-      "y": 77,
-      "subtitle": ""
+      "label": "BMC SoC",
+      "subtitle": "CSI / ISP \u00b7 I2C 0/1/2",
+      "x": 50,
+      "y": 50,
+      "width": 118,
+      "height": 160
     }
   ],
   "edges": [
     {
-      "from": "cam2",
+      "from": "g0_p0",
       "to": "des0",
-      "linkMetric": "cam2_link",
-      "videoMetric": "cam2_video"
+      "linkMetric": "g0_p0_link",
+      "videoMetric": "g0_p0_video"
     },
     {
-      "from": "cam3",
+      "from": "g0_p1",
       "to": "des0",
-      "linkMetric": "cam3_link",
-      "videoMetric": "cam3_video"
+      "linkMetric": "g0_p1_link",
+      "videoMetric": "g0_p1_video"
     },
     {
-      "from": "cam0",
+      "from": "g0_p2",
       "to": "des0",
-      "linkMetric": "Cam0",
-      "videoMetric": "Cam0"
+      "linkMetric": "g0_p2_link",
+      "videoMetric": "g0_p2_video"
     },
     {
-      "from": "node1",
+      "from": "g0_p3",
       "to": "des0",
-      "linkMetric": "Cam1",
-      "videoMetric": "Cam1"
+      "linkMetric": "g0_p3_link",
+      "videoMetric": "g0_p3_video"
     },
     {
-      "from": "node2",
-      "to": "soc"
+      "from": "g1_p0",
+      "to": "des1",
+      "linkMetric": "g1_p0_link",
+      "videoMetric": "g1_p0_video"
+    },
+    {
+      "from": "g1_p1",
+      "to": "des1",
+      "linkMetric": "g1_p1_link",
+      "videoMetric": "g1_p1_video"
+    },
+    {
+      "from": "g1_p2",
+      "to": "des1",
+      "linkMetric": "g1_p2_link",
+      "videoMetric": "g1_p2_video"
+    },
+    {
+      "from": "g1_p3",
+      "to": "des1",
+      "linkMetric": "g1_p3_link",
+      "videoMetric": "g1_p3_video"
+    },
+    {
+      "from": "g2_p0",
+      "to": "des2",
+      "linkMetric": "g2_p0_link",
+      "videoMetric": "g2_p0_video"
+    },
+    {
+      "from": "g2_p1",
+      "to": "des2",
+      "linkMetric": "g2_p1_link",
+      "videoMetric": "g2_p1_video"
+    },
+    {
+      "from": "g2_p2",
+      "to": "des2",
+      "linkMetric": "g2_p2_link",
+      "videoMetric": "g2_p2_video"
+    },
+    {
+      "from": "g2_p3",
+      "to": "des2",
+      "linkMetric": "g2_p3_link",
+      "videoMetric": "g2_p3_video"
     },
     {
       "from": "des0",
       "to": "soc"
     },
     {
-      "from": "node3",
-      "to": "node2"
-    },
-    {
-      "from": "node4",
-      "to": "node2"
-    },
-    {
-      "from": "node5",
-      "to": "node2"
-    },
-    {
-      "from": "node6",
-      "to": "node2"
-    },
-    {
-      "from": "node7",
+      "from": "des1",
       "to": "soc"
     },
     {
-      "from": "node9",
-      "to": "node7"
-    },
-    {
-      "from": "node11",
-      "to": "node7"
-    },
-    {
-      "from": "node12",
-      "to": "node7"
-    },
-    {
-      "from": "node8",
-      "to": "node7",
-      "linkMetric": "cam0_link_lock",
-      "videoMetric": "cam0_video_lock"
+      "from": "des2",
+      "to": "soc"
     }
   ],
-  "height": 1420
+  "height": 640
 }

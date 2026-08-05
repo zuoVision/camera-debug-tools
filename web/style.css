@@ -22,4 +22,65 @@ body[data-page="dashboard"] main header{height:64px;margin-bottom:14px}body[data
 .topology-edge text{font-size:.9px;letter-spacing:.05px;stroke-width:.35px}
 .node-resize-handle{position:absolute;right:-6px;bottom:-6px;width:14px;height:14px;border:2px solid #dcecff;border-radius:3px;background:var(--blue);box-shadow:0 0 0 2px #0b1017;cursor:nwse-resize;z-index:4}.topology.editing .topology-node:has(.node-resize-handle:active){cursor:nwse-resize}.node-position{grid-template-columns:repeat(2,1fr)}
 .access-token-dialog{position:fixed;inset:0;z-index:30;background:#07101bef;display:grid;place-items:center;padding:20px}.access-token-dialog.hidden{display:none}.access-token-dialog form{width:min(440px,100%);display:grid;gap:16px;background:var(--panel);border:1px solid var(--blue);border-radius:12px;padding:28px;box-shadow:0 20px 80px #000}.access-token-dialog h2,.access-token-dialog p{margin:0}.access-token-dialog p{color:var(--muted);line-height:1.6}.access-token-dialog label{display:grid;gap:7px;color:var(--muted);font-size:12px}.access-token-dialog input{width:100%;border:1px solid var(--line);background:#0c131d;border-radius:6px;padding:11px;color:var(--text)}.access-token-dialog input:focus{border-color:var(--blue)}.access-token-dialog form>div{display:flex;gap:10px}.access-token-dialog button{border:0;border-radius:6px;background:#1d6fba;color:#fff;padding:9px 14px;cursor:pointer}.access-token-dialog small:empty{display:none}
+
+/* Dense BMC topology: readable at 100% without a tall virtual canvas. */
+body[data-page="dashboard"] .dashboard-topology-column .topology{overflow:hidden}
+.topology-node{box-sizing:border-box}
+.topology-node.camera{padding:6px;border-radius:12px}
+.topology-node.radar{padding:7px;border-radius:10px}
+.topology-node span{font-size:11px;line-height:1.15}
+.topology-node small{font-size:9px;line-height:1.15}
+.topology-node b{font-size:8px;margin-top:4px}
+.topology-edge path{stroke-width:1.5}
+.topology-edge.lost>path{stroke-dasharray:5 5}
+.topology-edge .data-flow{stroke-width:2.2}
+.break-mark path{stroke-width:1.2!important}
+body[data-page="dashboard"] .dashboard-metrics-column .metrics{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+body[data-page="dashboard"] .dashboard-metrics-column .metric{padding:9px 12px}
+body[data-page="dashboard"] .dashboard-metrics-column .metric-head span:last-child{max-width:58%;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:760px){body[data-page="dashboard"] .dashboard-topology-column .topology{overflow:auto}}
+
+@media(min-width:761px){
+  aside{width:190px;padding:22px 12px}
+  .brand{gap:9px;padding:0 6px 26px}
+  .brand b{font-size:15px}
+  .lens{width:34px;height:34px}
+  nav{gap:5px}
+  nav button{padding:11px 10px;font-size:13px}
+  nav span{margin-left:8px}
+  .target{padding:16px 6px 0}
+  main{margin-left:190px;width:calc(100% - 190px);padding-left:26px;padding-right:26px}
+
+  body[data-page="dashboard"] .dashboard-grid{
+    grid-template-rows:minmax(0,5fr) minmax(78px,1fr);
+    gap:7px
+  }
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-section{margin-bottom:3px}
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-section h2{font-size:16px}
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-section button{
+    height:29px;
+    padding:0 10px;
+    font-size:12px
+  }
+  body[data-page="dashboard"] .dashboard-metrics-column .inline-filter{font-size:11px}
+  body[data-page="dashboard"] .dashboard-metrics-column .inline-filter select{padding:5px 7px}
+  body[data-page="dashboard"] .dashboard-metrics-column .metrics{
+    grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    grid-auto-rows:56px;
+    gap:6px
+  }
+  body[data-page="dashboard"] .dashboard-metrics-column .metric{
+    min-height:56px;
+    padding:7px 10px
+  }
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-head{font-size:10px;gap:5px}
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-head span:last-child{font-size:9px}
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-value{
+    font-size:17px;
+    line-height:1;
+    margin:7px 0 0
+  }
+  body[data-page="dashboard"] .dashboard-metrics-column .metric-foot{display:none}
+  body[data-page="dashboard"] .dashboard-metrics-column .metric:after{width:38px;height:38px}
+}
 .diagnostic-session{padding:24px;margin-bottom:20px}.diagnostic-session-head{display:flex;justify-content:space-between;align-items:start;gap:18px}.diagnostic-session-head h2{margin:0 0 6px}.diagnostic-session-head p{margin:0;color:var(--muted)}.session-status{flex:none;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:11px}.session-status.active,.session-status.running,.session-status.recording{color:var(--green);border-color:#31694c;background:#173326}.session-status.ended,.session-status.completed{color:var(--cyan);border-color:#286b72;background:#123136}.diagnostic-session-controls{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:20px 0}.diagnostic-session-controls label{display:grid;gap:6px;color:var(--muted);font-size:12px;flex:1;min-width:240px}.diagnostic-session-controls input{width:100%;border:1px solid var(--line);background:#0c131d;border-radius:6px;padding:9px;color:var(--text)}.diagnostic-session-controls button{border:0;border-radius:6px;background:#1d6fba;color:#fff;padding:9px 12px;cursor:pointer}.diagnostic-session-controls button:disabled{opacity:.42;cursor:not-allowed}.session-info{display:grid;grid-template-columns:100px 1fr;gap:7px;margin:16px 0}.session-info dt{color:var(--muted)}.session-info dd{margin:0}.diagnostic-session h3{margin:20px 0 10px!important}.session-timeline{display:grid;gap:7px;max-height:300px;overflow:auto}.session-event{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;padding:9px 11px;border:1px solid var(--line);border-radius:6px;background:#0c131d}.session-event time{font-size:11px;color:var(--muted)}.session-event span{display:flex;gap:9px;min-width:0;color:#b7c5d6;font-size:12px}.session-event b{color:var(--cyan);font-size:10px;text-transform:uppercase}.session-event small{display:block;color:var(--muted);overflow-wrap:anywhere}.diagnostic-grid{margin-top:0}@media(max-width:700px){.diagnostic-session-head,.session-event{grid-template-columns:1fr;display:grid}.diagnostic-session-controls{align-items:stretch;flex-direction:column}.diagnostic-session-controls label{min-width:0}.session-event span{display:grid;gap:4px}}

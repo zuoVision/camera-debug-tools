@@ -1,14 +1,41 @@
 {
   "metrics": [
     {
-      "id": "cam0_link_lock",
-      "name": "Cam0 Link",
-      "group": "Camera 0",
-      "command": "sh -lc 'csi i2c 2 2 0xD6 0x1A'",
+      "id": "g0_p0_power",
+      "name": "PMIC Power",
+      "group": "Group 0 · CAM5 右后",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
       "interval": 2,
       "parser": {
         "type": "regex",
-        "pattern": "\\[0x[0-9a-fA-F]+\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p0_link",
+      "name": "GMSL Link",
+      "group": "Group 0 · CAM5 右后",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[aA]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
         "group": 1,
         "bit": 3,
         "map": {
@@ -23,17 +50,19 @@
         ]
       },
       "enabled": true,
-      "timeout": 10
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
     },
     {
-      "id": "cam0_video_lock",
-      "name": "Cam0 Video",
-      "group": "Camera 0",
-      "command": "sh -lc 'csi i2c 2 2 0xD6 0x1dc'",
+      "id": "g0_p0_video",
+      "name": "Video Lock",
+      "group": "Group 0 · CAM5 右后",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
       "interval": 2,
       "parser": {
         "type": "regex",
-        "pattern": "\\[0x[0-9a-fA-F]+\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "pattern": "\\[0x0*1[dD][cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
         "group": 1,
         "bit": 0,
         "map": {
@@ -48,7 +77,1062 @@
         ]
       },
       "enabled": true,
-      "timeout": 10
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p1_power",
+      "name": "PMIC Power",
+      "group": "Group 0 · CAM6 左后",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 1,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p1_link",
+      "name": "GMSL Link",
+      "group": "Group 0 · CAM6 左后",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[aA]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p1_video",
+      "name": "Video Lock",
+      "group": "Group 0 · CAM6 左后",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[fF][cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p2_power",
+      "name": "PMIC Power",
+      "group": "Group 0 · CAM7 左前",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 2,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p2_link",
+      "name": "GMSL Link",
+      "group": "Group 0 · CAM7 左前",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[bB]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p2_video",
+      "name": "Video Lock",
+      "group": "Group 0 · CAM7 左前",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*21[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p3_power",
+      "name": "PMIC Power",
+      "group": "Group 0 · CAM8 右前",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p3_link",
+      "name": "GMSL Link",
+      "group": "Group 0 · CAM8 右前",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g0_p3_video",
+      "name": "Video Lock",
+      "group": "Group 0 · CAM8 右前",
+      "command": "sh -lc '/bmc/bin/csi i2c 0 0 0x50,1 0x01,1; /bmc/bin/csi i2c 0 0 0x4E,2 0x0A,17; /bmc/bin/csi i2c 0 0 0x4E,2 0x1DC,33; /bmc/bin/csi i2c 0 0 0x4E,2 0x21C,33'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*23[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g0",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p0_power",
+      "name": "PMIC Power",
+      "group": "Group 1 · CAM9 后鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p0_link",
+      "name": "GMSL Link",
+      "group": "Group 1 · CAM9 后鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[aA]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p0_video",
+      "name": "Video Lock",
+      "group": "Group 1 · CAM9 后鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[dD][cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p1_power",
+      "name": "PMIC Power",
+      "group": "Group 1 · CAM10 左鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 1,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p1_link",
+      "name": "GMSL Link",
+      "group": "Group 1 · CAM10 左鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[aA]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p1_video",
+      "name": "Video Lock",
+      "group": "Group 1 · CAM10 左鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[fF][cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p2_power",
+      "name": "PMIC Power",
+      "group": "Group 1 · CAM11 前鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 2,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p2_link",
+      "name": "GMSL Link",
+      "group": "Group 1 · CAM11 前鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[bB]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p2_video",
+      "name": "Video Lock",
+      "group": "Group 1 · CAM11 前鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*21[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p3_power",
+      "name": "PMIC Power",
+      "group": "Group 1 · CAM12 右鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p3_link",
+      "name": "GMSL Link",
+      "group": "Group 1 · CAM12 右鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_p3_video",
+      "name": "Video Lock",
+      "group": "Group 1 · CAM12 右鱼眼",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*23[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p0_power",
+      "name": "PMIC Power",
+      "group": "Group 2 · CAM0 前远",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p0_link",
+      "name": "GMSL Link",
+      "group": "Group 2 · CAM0 前远",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[aA]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p0_video",
+      "name": "Video Lock",
+      "group": "Group 2 · CAM0 前远",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[dD][cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p1_power",
+      "name": "PMIC Power",
+      "group": "Group 2 · CAM1 前广",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 1,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p1_link",
+      "name": "GMSL Link",
+      "group": "Group 2 · CAM1 前广",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[aA]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p1_video",
+      "name": "Video Lock",
+      "group": "Group 2 · CAM1 前广",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1[fF][cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p2_power",
+      "name": "PMIC Power",
+      "group": "Group 2 · CAM2 后中",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 2,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p2_link",
+      "name": "GMSL Link",
+      "group": "Group 2 · CAM2 后中",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[bB]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p2_video",
+      "name": "Video Lock",
+      "group": "Group 2 · CAM2 后中",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*21[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p3_power",
+      "name": "PMIC Power",
+      "group": "Group 2 · 4D Radar 前雷达",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*1\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "OFF",
+          "1": "ON"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "ON"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p3_link",
+      "name": "GMSL Link",
+      "group": "Group 2 · 4D Radar 前雷达",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_p3_video",
+      "name": "Video Lock",
+      "group": "Group 2 · 4D Radar 前雷达",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 2,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*23[cC]\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 0,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_f2_link",
+      "name": "Serializer Link",
+      "group": "Bypass · G1 SVS PIN3",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 6,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*13\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_f2_pclk",
+      "name": "PCLK Detect",
+      "group": "Bypass · G1 SVS PIN3",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 6,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*112\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 7,
+        "map": {
+          "0": "NO CLOCK",
+          "1": "CLOCK OK"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "CLOCK OK"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_f4_link",
+      "name": "Serializer Link",
+      "group": "Bypass · G1 SVS PIN4",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 6,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*13\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g1_f4_pclk",
+      "name": "PCLK Detect",
+      "group": "Bypass · G1 SVS PIN4",
+      "command": "sh -lc '/bmc/bin/csi i2c 1 1 0x50,1 0x01,1; /bmc/bin/csi i2c 1 1 0x52,2 0x0A,17; /bmc/bin/csi i2c 1 1 0x52,2 0x1DC,33; /bmc/bin/csi i2c 1 1 0x52,2 0x21C,33; /bmc/bin/csi i2c 1 1 0xF2,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF2,2 0x0112,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0013,1; /bmc/bin/csi i2c 1 1 0xF4,2 0x0112,1'",
+      "interval": 6,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*112\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 7,
+        "map": {
+          "0": "NO CLOCK",
+          "1": "CLOCK OK"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "CLOCK OK"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g1",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_f2_link",
+      "name": "Serializer Link",
+      "group": "Bypass · G2 FWC PIN1",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 6,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*13\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 3,
+        "map": {
+          "0": "LOST",
+          "1": "LOCKED"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "LOCKED"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
+    },
+    {
+      "id": "g2_f2_pclk",
+      "name": "PCLK Detect",
+      "group": "Bypass · G2 FWC PIN1",
+      "command": "sh -lc '/bmc/bin/csi i2c 2 2 0x50,1 0x01,1; /bmc/bin/csi i2c 2 2 0xD6,2 0x0A,17; /bmc/bin/csi i2c 2 2 0xD6,2 0x1DC,33; /bmc/bin/csi i2c 2 2 0xD6,2 0x21C,33; /bmc/bin/csi i2c 2 2 0xF2,2 0x0013,1; /bmc/bin/csi i2c 2 2 0xF2,2 0x0112,1'",
+      "interval": 6,
+      "parser": {
+        "type": "regex",
+        "pattern": "\\[0x0*112\\]\\s*=\\s*(0x[0-9a-fA-F]+)",
+        "group": 1,
+        "bit": 7,
+        "map": {
+          "0": "NO CLOCK",
+          "1": "CLOCK OK"
+        }
+      },
+      "display": {
+        "kind": "status",
+        "goodValues": [
+          "CLOCK OK"
+        ]
+      },
+      "enabled": true,
+      "timeout": 5,
+      "batch": "g2",
+      "batchCache": 1
     }
   ]
 }

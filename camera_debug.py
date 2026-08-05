@@ -36,6 +36,7 @@ from camera_debug_studio.monitoring import apply_parser_transforms, parse_metric
 from camera_debug_studio.terminal import TerminalSession
 from camera_debug_studio.transport import (
     command_environment as build_command_environment,
+    scp_upload_command as build_scp_upload_command,
     terminal_command as build_terminal_command,
     transport_command as build_transport_command,
 )
@@ -74,6 +75,8 @@ class Runtime:
         self.monitor_thread: Optional[threading.Thread] = None
         self.monitor_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="metric")
         self.metric_running: set[str] = set()
+        self.metric_batch_cache: Dict[str, Dict[str, Any]] = {}
+        self.metric_batch_locks: Dict[str, threading.Lock] = {}
         self.config_generation = 0
         self.monitor_paused = False
         self.job_slots = threading.BoundedSemaphore(MAX_CONCURRENT_JOBS)
@@ -106,6 +109,8 @@ class Runtime:
             self.config = data
             self.metrics.clear()
             self.metric_running.clear()
+            self.metric_batch_cache.clear()
+            self.metric_batch_locks.clear()
         self._record_diagnostic_event("profile_changed", {
             "profile": data.get("project", {}).get("name", path.name),
             "transport": data.get("target", {}).get("transport", "ssh"),
@@ -299,6 +304,40 @@ class Runtime:
     def transport_command(self, remote_command: str) -> List[str]:
         return build_transport_command(self.config, remote_command)
 
+    def platform_scripts(self) -> Dict[str, Any]:
+        script_root = self.config_path / "scripts" if self.config_path.is_dir() else self.config_path.parent / f"{self.config_path.stem}-scripts"
+        items = []
+        if script_root.is_dir():
+            for path in sorted(script_root.rglob("*")):
+                if not path.is_file() or path.suffix.lower() not in (".bat", ".sh"):
+                    continue
+                relative = path.relative_to(script_root).as_posix()
+                items.append({"id": relative, "name": path.stem, "type": path.suffix.lower()[1:],
+                              "path": relative})
+        return {"items": items, "count": len(items), "directory": str(script_root)}
+
+    def start_platform_script(self, script_id: str) -> Job:
+        scripts = {item["id"]: item for item in self.platform_scripts()["items"]}
+        spec = scripts.get(script_id)
+        if not spec:
+            raise ValueError("未知或已变化的平台脚本，请刷新脚本列表")
+        script_root = self.config_path / "scripts" if self.config_path.is_dir() else self.config_path.parent / f"{self.config_path.stem}-scripts"
+        path = (script_root / script_id).resolve()
+        if script_root.resolve() not in path.parents or not path.is_file():
+            raise ValueError("平台脚本路径无效")
+        if spec["type"] == "bat":
+            if os.name != "nt":
+                raise ValueError("BAT 脚本只能在 Windows 主机运行")
+            return self.start_job(str(path), "platform-script", f"本地 BAT · {spec['name']}",
+                                  argv=[os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", str(path)],
+                                  cwd=str(path.parent))
+        remote_path = f"/tmp/camera_debug_{uuid.uuid4().hex[:10]}_{re.sub(r'[^A-Za-z0-9_.-]', '_', path.name)}"
+        upload = build_scp_upload_command(self.config, str(path), remote_path)
+        remote_command = f"chmod +x {remote_path} && sh {remote_path}; rc=$?; rm -f {remote_path}; exit $rc"
+        return self.start_job(remote_command, "platform-script", f"远端 SH · {spec['name']}",
+                              argv=self.transport_command(remote_command), pre_argv=[upload],
+                              encoding="utf-8")
+
     def terminal_command(self) -> List[str]:
         """Build a persistent interactive shell command for a PTY session."""
         return build_terminal_command(self.config)
@@ -316,14 +355,17 @@ class Runtime:
     def start_job(self, command: str, kind: str = "command", name: str = "命令",
                   timeout: Optional[float] = None,
                   expected_exit_codes: Optional[List[int]] = None,
-                  argv: Optional[List[str]] = None, cwd: Optional[str] = None) -> Job:
+                  argv: Optional[List[str]] = None, cwd: Optional[str] = None,
+                  pre_argv: Optional[List[List[str]]] = None,
+                  encoding: Optional[str] = None) -> Job:
         self._prune_jobs()
         with STATE_LOCK:
             active = sum(job.status in ("queued", "running", "stopping") for job in self.jobs.values())
             if active >= MAX_CONCURRENT_JOBS:
                 raise ApiError("并发任务已达到上限，请等待当前任务结束", "job_limit")
             job = Job(uuid.uuid4().hex[:12], kind, name, command, timeout=timeout,
-                      expected_exit_codes=expected_exit_codes or [0], argv=argv, cwd=cwd)
+                      expected_exit_codes=expected_exit_codes or [0], argv=argv,
+                      pre_argv=pre_argv or [], cwd=cwd, encoding=encoding)
             self.jobs[job.id] = job
         self._record_diagnostic_event("job_created", {
             "jobId": job.id, "kind": job.kind, "name": job.name,
@@ -336,9 +378,12 @@ class Runtime:
         TEST_DIR.mkdir(exist_ok=True)
         python = self.pytest_python()
         argv = [python, "-m", "pytest", "--collect-only", "-q", TEST_DIR.name]
+        environment = self.command_environment()
+        environment.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
         try:
             result = subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True,
-                                    timeout=30, errors="replace")
+                                    timeout=30, errors="replace", env=environment,
+                                    encoding="utf-8")
         except subprocess.TimeoutExpired:
             raise ValueError("Pytest 用例收集超时（30 秒）")
         output = (result.stdout + "\n" + result.stderr).strip()
@@ -390,12 +435,28 @@ class Runtime:
             if job.status == "stopping":
                 job.status = "stopped"
                 return
+            environment = self.command_environment()
+            for pre_argv in job.pre_argv:
+                job.append("stdout", f"[准备] {subprocess.list2cmdline(pre_argv)}")
+                prepared = subprocess.run(pre_argv, capture_output=True, text=True, errors="replace",
+                                          timeout=60, env=environment)
+                for line in prepared.stdout.splitlines():
+                    job.append("stdout", line)
+                for line in prepared.stderr.splitlines():
+                    job.append("stderr", line)
+                if prepared.returncode != 0:
+                    job.status = "failed"
+                    job.exit_code = prepared.returncode
+                    return
             argv = job.argv or self.transport_command(job.command)
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            if job.kind == "pytest":
+                environment.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
             process = subprocess.Popen(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1, errors="replace", creationflags=flags,
-                start_new_session=(os.name != "nt"), env=self.command_environment(),
+                start_new_session=(os.name != "nt"), env=environment,
+                encoding=job.encoding or ("utf-8" if job.kind == "pytest" else None),
                 cwd=job.cwd,
             )
             job.process = process
@@ -500,29 +561,63 @@ class Runtime:
                               float(test.get("timeout")) if test.get("timeout") else None,
                               test.get("expectedExitCodes", [0]))
 
-    def query_metric(self, metric: Dict[str, Any]) -> Dict[str, Any]:
+    def _query_metric_command(self, metric: Dict[str, Any]) -> Dict[str, Any]:
         command = render(metric["command"], self.config.get("variables", {}))
         started = now_ms()
+        batch = str(metric.get("batch", "")).strip()
+        lock = None
+        if batch:
+            with STATE_LOCK:
+                lock = self.metric_batch_locks.setdefault(batch, threading.Lock())
+            lock.acquire()
+            cached = self.metric_batch_cache.get(batch)
+            cache_seconds = float(metric.get("batchCache", 1.0))
+            if (cached and cached.get("command") == command
+                    and time.monotonic() - cached["cachedAt"] <= cache_seconds):
+                lock.release()
+                return cached["result"]
         previous = self.metrics.get(metric["id"], {})
         try:
             result = subprocess.run(self.transport_command(command), capture_output=True, text=True,
                                     timeout=float(metric.get("timeout", 5)), errors="replace",
                                     env=self.command_environment())
             output = (result.stdout + "\n" + result.stderr).strip()
-            parser = metric.get("parser", {"type": "text"})
-            value = parse_metric_output(parser, output)
-            ok = result.returncode == 0
-            return {"id": metric["id"], "value": value, "ok": ok, "raw": output,
-                    "durationMs": now_ms() - started, "failureCount": 0 if ok else int(previous.get("failureCount", 0)) + 1,
-                    "errorCode": None if ok else "nonzero_exit", "updatedAt": now_ms()}
+            command_result = {"ok": result.returncode == 0, "raw": output,
+                              "durationMs": now_ms() - started,
+                              "errorCode": None if result.returncode == 0 else "nonzero_exit"}
         except subprocess.TimeoutExpired as exc:
-            return {"id": metric["id"], "value": "--", "ok": False, "error": str(exc),
-                    "errorCode": "timeout", "durationMs": now_ms() - started,
-                    "failureCount": int(previous.get("failureCount", 0)) + 1, "updatedAt": now_ms()}
+            command_result = {"ok": False, "raw": "", "error": str(exc), "errorCode": "timeout",
+                              "durationMs": now_ms() - started}
+        except Exception as exc:
+            command_result = {"ok": False, "raw": "", "error": str(exc),
+                              "errorCode": "transport", "durationMs": now_ms() - started}
+        finally:
+            if batch and lock:
+                self.metric_batch_cache[batch] = {"command": command, "cachedAt": time.monotonic(),
+                                                  "result": command_result}
+                lock.release()
+        return command_result
+
+    def query_metric(self, metric: Dict[str, Any]) -> Dict[str, Any]:
+        started = now_ms()
+        previous = self.metrics.get(metric["id"], {})
+        command_result = self._query_metric_command(metric)
+        try:
+            if not command_result["ok"]:
+                return {"id": metric["id"], "value": "--", "ok": False,
+                        "error": command_result.get("error", command_result.get("raw", "")),
+                        "errorCode": command_result.get("errorCode", "nonzero_exit"),
+                        "durationMs": command_result["durationMs"],
+                        "failureCount": int(previous.get("failureCount", 0)) + 1,
+                        "updatedAt": now_ms()}
+            value = parse_metric_output(metric.get("parser", {"type": "text"}), command_result["raw"])
+            return {"id": metric["id"], "value": value, "ok": True,
+                    "raw": command_result["raw"], "durationMs": now_ms() - started,
+                    "failureCount": 0, "errorCode": None, "updatedAt": now_ms()}
         except Exception as exc:
             self.record_error("metric", f"{metric['id']}: {exc}", "metric_error")
-            return {"id": metric["id"], "value": "--", "ok": False,
-                    "error": str(exc), "errorCode": "parse_or_transport", "durationMs": now_ms() - started,
+            return {"id": metric["id"], "value": "--", "ok": False, "error": str(exc),
+                    "errorCode": "parse_or_transport", "durationMs": now_ms() - started,
                     "failureCount": int(previous.get("failureCount", 0)) + 1, "updatedAt": now_ms()}
 
     def _collect_metric(self, metric: Dict[str, Any], generation: int) -> None:
@@ -876,6 +971,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"jobs": RUNTIME.job_history()})
         if path == "/api/config/profiles":
             return self.json_response({"profiles": RUNTIME.profiles()})
+        if path == "/api/platform-scripts":
+            return self.json_response(RUNTIME.platform_scripts())
         if path == "/api/pytest/collect":
             try:
                 return self.json_response(RUNTIME.collect_pytest())
@@ -923,6 +1020,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({"cleared": RUNTIME.clear_diagnostic_session()})
             if self.path == "/api/tests":
                 return self.json_response(RUNTIME.run_test(str(data.get("testId", "")), data.get("params", {})).public(), 201)
+            if self.path == "/api/platform-scripts/run":
+                return self.json_response(RUNTIME.start_platform_script(str(data.get("scriptId", ""))).public(), 201)
             if self.path == "/api/pytest/run":
                 return self.json_response(RUNTIME.start_pytest(str(data.get("nodeId", ""))).public(), 201)
             if self.path == "/api/connection/test":

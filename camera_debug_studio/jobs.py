@@ -30,7 +30,9 @@ class Job:
     lines: List[Dict[str, Any]] = field(default_factory=list)
     process: Optional[subprocess.Popen] = None
     argv: Optional[List[str]] = None
+    pre_argv: List[List[str]] = field(default_factory=list)
     cwd: Optional[str] = None
+    encoding: Optional[str] = None
     timeout: Optional[float] = None
     expected_exit_codes: List[int] = field(default_factory=lambda: [0])
     stop_reason: Optional[str] = None

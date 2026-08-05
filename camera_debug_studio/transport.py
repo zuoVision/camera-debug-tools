@@ -65,6 +65,29 @@ def transport_command(config: Dict[str, Any], remote_command: str) -> List[str]:
     return _ssh_base(target, False) + [remote_command]
 
 
+def scp_upload_command(config: Dict[str, Any], local_path: str, remote_path: str) -> List[str]:
+    """Build an SCP upload command using the active SSH target credentials."""
+    target = config.get("target", {})
+    if target.get("transport", "ssh") != "ssh":
+        raise ValueError("Shell 脚本只能上传到 SSH 目标")
+    host = target.get("host", "")
+    if not host:
+        raise ValueError("SSH host 未配置")
+    user = target.get("user", "")
+    destination = f"{user}@{host}" if user else host
+    argv = [target.get("scpBinary", "scp"), "-P", str(target.get("port", 22)),
+            "-o", f"ConnectTimeout={int(target.get('connectTimeout', 8))}"]
+    if target.get("identityFile"):
+        argv += ["-i", os.path.expanduser(target["identityFile"])]
+    for option in target.get("sshOptions", []):
+        argv += ["-o", str(option)]
+    if target.get("password"):
+        argv += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]
+    else:
+        argv += ["-o", "BatchMode=yes"]
+    return argv + [local_path, f"{destination}:{remote_path}"]
+
+
 def terminal_command(config: Dict[str, Any]) -> List[str]:
     target = config.get("target", {})
     mode = target.get("transport", "ssh")

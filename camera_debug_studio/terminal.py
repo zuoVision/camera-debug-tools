@@ -26,8 +26,9 @@ class TerminalSession:
         self.send = send
         self.closed = threading.Event()
         self.master_fd: Optional[int] = None
-        self.encoding = str(runtime.config.get("target", {}).get(
-            "terminalEncoding", locale.getpreferredencoding(False) if os.name == "nt" else "utf-8"))
+        target = runtime.config.get("target", {})
+        default_encoding = "utf-8" if target.get("transport", "ssh") == "ssh" else locale.getpreferredencoding(False)
+        self.encoding = str(target.get("terminalEncoding", default_encoding))
         command = runtime.terminal_command()
         if os.name == "nt":
             self.process = subprocess.Popen(
