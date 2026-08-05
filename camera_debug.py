@@ -10,7 +10,9 @@ import errno
 import hashlib
 import json
 import os
+import posixpath
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -24,7 +26,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from camera_debug_studio.config import (
     ConfigValidationError, MODULE_FILES, SENSITIVE_KEYS, load_json, load_profile, redact, render,
@@ -49,6 +51,8 @@ PROFILE_DIR = CONFIG_DIR / "profiles"
 TEST_DIR = ROOT / "test"
 VERSION = "0.2.0"
 MAX_BODY_BYTES = 1024 * 1024
+MAX_UPLOAD_BYTES = 24 * 1024 * 1024
+MAX_UPLOAD_REQUEST_BYTES = 34 * 1024 * 1024
 MAX_WS_BYTES = 1024 * 1024
 MAX_JOBS = 200
 MAX_CONCURRENT_JOBS = 8
@@ -303,6 +307,98 @@ class Runtime:
 
     def transport_command(self, remote_command: str) -> List[str]:
         return build_transport_command(self.config, remote_command)
+
+    @staticmethod
+    def parse_sftp_listing(output: str, directory: str) -> List[Dict[str, Any]]:
+        entries = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line or line.startswith("total "):
+                continue
+            fields = line.split(None, 8)
+            if len(fields) < 9 or not fields[0] or fields[0][0] not in "-dlcbps":
+                continue
+            mode, size_text, name = fields[0], fields[4], fields[8]
+            if name in (".", ".."):
+                continue
+            if mode.startswith("l") and " -> " in name:
+                name = name.split(" -> ", 1)[0]
+            try:
+                size = int(size_text)
+            except ValueError:
+                size = 0
+            entries.append({
+                "name": name,
+                "path": posixpath.join(directory.rstrip("/") or "/", name),
+                "type": "directory" if mode.startswith("d") else "file",
+                "size": size,
+                "mode": mode,
+                "modified": " ".join(fields[5:8]),
+            })
+        return sorted(entries, key=lambda item: (item["type"] != "directory", item["name"].lower()))
+
+    def sftp_list(self, directory: str) -> Dict[str, Any]:
+        if self.config.get("target", {}).get("transport", "ssh") != "ssh":
+            raise ApiError("SFTP 文件浏览仅适用于 SSH 目标", "sftp_requires_ssh")
+        directory = directory.strip() or "/"
+        if not directory.startswith("/") or "\x00" in directory or "\r" in directory or "\n" in directory:
+            raise ApiError("远程目录必须是绝对路径", "invalid_remote_path")
+        directory = posixpath.normpath(directory)
+        command = f"LC_ALL=C ls -lan -- {shlex.quote(directory)}"
+        try:
+            result = subprocess.run(
+                self.transport_command(command), capture_output=True, timeout=20,
+                env=self.command_environment(), encoding="utf-8", errors="replace",
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ApiError("读取远程目录超时", "sftp_timeout") from exc
+        except OSError as exc:
+            raise ApiError(f"无法启动 SSH：{exc}", "sftp_unavailable") from exc
+        if result.returncode != 0:
+            raise ApiError((result.stderr or result.stdout or "无法读取远程目录").strip(), "sftp_list_failed")
+        return {
+            "path": directory,
+            "parent": posixpath.dirname(directory.rstrip("/")) or "/",
+            "entries": self.parse_sftp_listing(result.stdout, directory),
+        }
+
+    def sftp_upload(self, directory: str, name: str, encoded: str) -> Dict[str, Any]:
+        if self.config.get("target", {}).get("transport", "ssh") != "ssh":
+            raise ApiError("SFTP 上传仅适用于 SSH 目标", "sftp_requires_ssh")
+        directory = posixpath.normpath(directory.strip() or "/")
+        name = name.strip()
+        if (not directory.startswith("/") or not name or name in (".", "..") or
+                posixpath.basename(name) != name or any(char in directory + name for char in "\x00\r\n")):
+            raise ApiError("远程上传路径无效", "invalid_remote_path")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ApiError("上传内容不是有效的 Base64", "invalid_upload") from exc
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ApiError(f"单个文件不能超过 {MAX_UPLOAD_BYTES // 1024 // 1024} MB", "upload_too_large")
+        suffix = Path(name).suffix[:16]
+        temporary = tempfile.NamedTemporaryFile(prefix="camera_debug_upload_", suffix=suffix, delete=False)
+        temporary_path = Path(temporary.name)
+        try:
+            temporary.write(content)
+            temporary.close()
+            remote_path = posixpath.join(directory.rstrip("/") or "/", name)
+            try:
+                result = subprocess.run(
+                    build_scp_upload_command(self.config, str(temporary_path), remote_path),
+                    capture_output=True, timeout=120, env=self.command_environment(),
+                    encoding="utf-8", errors="replace",
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ApiError("上传远程文件超时", "sftp_timeout") from exc
+            except OSError as exc:
+                raise ApiError(f"无法启动 SCP：{exc}", "sftp_unavailable") from exc
+            if result.returncode != 0:
+                raise ApiError((result.stderr or result.stdout or "上传失败").strip(), "sftp_upload_failed")
+            return {"ok": True, "path": remote_path, "size": len(content)}
+        finally:
+            temporary.close()
+            temporary_path.unlink(missing_ok=True)
 
     def platform_scripts(self) -> Dict[str, Any]:
         script_root = self.config_path / "scripts" if self.config_path.is_dir() else self.config_path.parent / f"{self.config_path.stem}-scripts"
@@ -877,12 +973,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = parsed or urlparse(self.path)
         return token_authorized(ACCESS_TOKEN, self.headers.get("X-Access-Token", ""), parsed.query)
 
-    def body_json(self) -> Dict[str, Any]:
+    def body_json(self, max_bytes: int = MAX_BODY_BYTES) -> Dict[str, Any]:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             raise ApiError("Content-Length 无效", "invalid_content_length")
-        if length < 0 or length > MAX_BODY_BYTES:
+        if length < 0 or length > max_bytes:
             raise ApiError("请求体过大", "request_too_large")
         return json.loads(self.rfile.read(length) or b"{}")
 
@@ -918,7 +1014,11 @@ class Handler(BaseHTTPRequestHandler):
             session = TerminalSession(RUNTIME, send)
             with STATE_LOCK:
                 RUNTIME.terminal_sessions.add(session)
-            send({"type": "ready", "transport": RUNTIME.config.get("target", {}).get("transport", "ssh")})
+            send({
+                "type": "ready",
+                "transport": RUNTIME.config.get("target", {}).get("transport", "ssh"),
+                "backend": session.backend,
+            })
             while not session.closed.is_set():
                 message = self.websocket_read()
                 if message is None:
@@ -973,6 +1073,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"profiles": RUNTIME.profiles()})
         if path == "/api/platform-scripts":
             return self.json_response(RUNTIME.platform_scripts())
+        if path == "/api/sftp/list":
+            try:
+                directory = parse_qs(parsed.query, keep_blank_values=True).get("path", ["/"])[0]
+                return self.json_response(RUNTIME.sftp_list(directory))
+            except ApiError as exc:
+                return self.error_response(str(exc), HTTPStatus.BAD_REQUEST, exc.code, exc.details)
         if path == "/api/pytest/collect":
             try:
                 return self.json_response(RUNTIME.collect_pytest())
@@ -1006,7 +1112,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self.authorized():
                 return self.error_response("访问令牌无效", HTTPStatus.UNAUTHORIZED, "unauthorized")
-            data = self.body_json()
+            data = self.body_json(MAX_UPLOAD_REQUEST_BYTES if self.path == "/api/sftp/upload" else MAX_BODY_BYTES)
             if self.path == "/api/commands":
                 command = str(data.get("command", "")).strip()
                 if not command: raise ValueError("命令不能为空")
@@ -1022,6 +1128,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(RUNTIME.run_test(str(data.get("testId", "")), data.get("params", {})).public(), 201)
             if self.path == "/api/platform-scripts/run":
                 return self.json_response(RUNTIME.start_platform_script(str(data.get("scriptId", ""))).public(), 201)
+            if self.path == "/api/sftp/upload":
+                return self.json_response(RUNTIME.sftp_upload(
+                    str(data.get("path", "/")), str(data.get("name", "")), str(data.get("content", ""))
+                ), 201)
             if self.path == "/api/pytest/run":
                 return self.json_response(RUNTIME.start_pytest(str(data.get("nodeId", ""))).public(), 201)
             if self.path == "/api/connection/test":
@@ -1084,7 +1194,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Camera Debug Studio")
-    parser.add_argument("--config", default=str(PROFILE_DIR / "demo-local"))
+    parser.add_argument("--config", default=str(PROFILE_DIR / "bmc"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")

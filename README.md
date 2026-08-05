@@ -5,8 +5,9 @@
 面向不同芯片平台和项目的配置化相机调试工具。当前提供：
 
 - SSH 密码/私钥认证与 Local 可替换传输层
-- WebSocket 持久交互终端：macOS/Linux 使用 PTY，Windows 使用系统 OpenSSH/持久 Shell 管道
-- 类终端命令执行与实时 stdout/stderr
+- xterm.js + WebSocket 持久交互终端，支持 ANSI、中文、IME、复制粘贴和全屏程序
+- macOS/Linux 使用 PTY，Windows 使用 ConPTY；未安装 pywinpty 时自动降级为管道兼容模式
+- SSH 终端集成 SFTP 文件浏览与拖拽上传、命令历史、快捷命令和会话日志搜索
 - Link Lock、Video Lock、FPS 等配置化监控卡片
 - 监控指标可视化编辑器，支持命令、解析、映射和展示规则配置
 - 测试项选择、脚本预览、参数化运行、实时日志和停止
@@ -19,6 +20,12 @@
 ## 启动
 
 需要 Python 3.9+，以及 SSH 场景下系统可用的 OpenSSH 客户端。
+
+Windows 首次运行先安装 ConPTY 依赖：
+
+```powershell
+py -m pip install -r requirements.txt
+```
 
 ```bash
 python3 camera_debug.py
