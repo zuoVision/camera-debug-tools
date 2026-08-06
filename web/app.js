@@ -1,6 +1,7 @@
 import {api, getAccessToken, hideAccessToken, initAuth} from './api.js';
 import {createDiagnostics} from './diagnostics.js';
 import {createConfigEditor} from './config-editor.js';
+import {createRegisterDecoder} from './register-decoder.js';
 
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 document.body.dataset.page='dashboard';
@@ -16,11 +17,11 @@ let terminalLineBuffer='',sftpPath='/',sftpLoaded=false;
 let terminalHistory=JSON.parse(localStorage.getItem('cameraDebugTerminalHistory')||'[]');
 let quickCommands=JSON.parse(localStorage.getItem('cameraDebugQuickCommands')||'[{"name":"进程","command":"ps aux"},{"name":"磁盘","command":"df -h"},{"name":"日志","command":"dmesg | tail -n 50"}]');
 let selectedMetricIndex=0;
-const titles={dashboard:['监控看板','实时掌握相机链路运行状态'],terminal:['命令终端','通过 SSH 执行远端指令并查看实时输出'],tests:['测试中心','配置化运行、观察和停止测试脚本'],settings:['平台配置','一个内核，适配不同芯片与项目'],diagnostics:['诊断信息','运行状态、错误与任务历史'],manual:['用户手册','工具介绍、操作方法与平台配置参考']};
+const titles={dashboard:['监控看板','实时掌握相机链路运行状态'],registers:['寄存器诊断','输入寄存器地址和回读值，直接查看状态'],terminal:['命令终端','通过 SSH 执行远端指令并查看实时输出'],tests:['测试中心','配置化运行、观察和停止测试脚本'],settings:['平台配置','一个内核，适配不同芯片与项目'],diagnostics:['诊断信息','运行状态、错误与任务历史'],manual:['用户手册','工具介绍、操作方法与平台配置参考']};
 function toast(s){const e=$('#toast');e.textContent=s;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 const configEditor=createConfigEditor({api,toast,escapeHtml:esc});
-function showPage(id){const current=$('.page.active')?.id;if(current==='settings'&&id!=='settings'&&!configEditor.confirmDiscard('离开平台配置页面'))return;document.body.dataset.page=id;$$('.page,nav button').forEach(x=>x.classList.remove('active'));$('#'+id).classList.add('active');$(`nav button[data-page="${id}"]`).classList.add('active');$('#pageTitle').textContent=titles[id][0];$('#subtitle').textContent=titles[id][1];if(id==='manual'&&!manualLoaded)loadManual();if(id==='tests'){if(!platformScriptsLoaded)loadPlatformScripts();if(!pytestLoaded)loadPytests();}if(id==='diagnostics')loadDiagnostics();if(id==='terminal'){fitTerminal();connectTerminal();if(!sftpLoaded)loadSftp(sftpPath);setTimeout(()=>xterm.focus())}}
+function showPage(id){const current=$('.page.active')?.id;if(current==='settings'&&id!=='settings'&&!configEditor.confirmDiscard('离开平台配置页面'))return;document.body.dataset.page=id;$$('.page,nav button').forEach(x=>x.classList.remove('active'));$('#'+id).classList.add('active');$(`nav button[data-page="${id}"]`).classList.add('active');$('#pageTitle').textContent=titles[id][0];$('#subtitle').textContent=titles[id][1];if(id==='manual'&&!manualLoaded)loadManual();if(id==='registers')registerDecoder.load();if(id==='tests'){if(!platformScriptsLoaded)loadPlatformScripts();if(!pytestLoaded)loadPytests();}if(id==='diagnostics')loadDiagnostics();if(id==='terminal'){fitTerminal();connectTerminal();if(!sftpLoaded)loadSftp(sftpPath);setTimeout(()=>xterm.focus())}}
 $$('nav button').forEach(b=>b.onclick=()=>showPage(b.dataset.page));
 $('.connection-panel>p').textContent='支持私钥或密码认证。配置接口不会返回已保存的密码。';
 $('#sshForm [name="password"]').placeholder='留空则保留已有密码或使用私钥';
@@ -92,6 +93,7 @@ window.addEventListener('resize',fitTerminal);window.visualViewport?.addEventLis
 window.addEventListener('beforeunload',()=>terminalSocket?.close());
 const diagnostics=createDiagnostics({api,escapeHtml:esc,notify:toast});
 const loadDiagnostics=diagnostics.load;
+const registerDecoder=createRegisterDecoder({api,escapeHtml:esc});
 $('#clearTerminal').onclick=()=>xterm.clear();
 $('#terminalReconnect').onclick=connectTerminal;
 $('#terminalHistory').onchange=event=>{if(event.target.value){terminalSend(event.target.value);terminalLineBuffer=event.target.value;xterm.focus();event.target.value=''}};

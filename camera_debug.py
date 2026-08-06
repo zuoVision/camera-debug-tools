@@ -35,6 +35,7 @@ from camera_debug_studio.config import (
 from camera_debug_studio.jobs import Job, MAX_JOB_LINES, STATE_LOCK, now_ms
 from camera_debug_studio.http import read_websocket_message, token_authorized, websocket_frame
 from camera_debug_studio.monitoring import apply_parser_transforms, parse_metric_output
+from camera_debug_studio.register_catalog import RegisterCatalog
 from camera_debug_studio.terminal import TerminalSession
 from camera_debug_studio.transport import (
     command_environment as build_command_environment,
@@ -49,6 +50,7 @@ WEB = ROOT / "web"
 CONFIG_DIR = ROOT / "configs"
 PROFILE_DIR = CONFIG_DIR / "profiles"
 TEST_DIR = ROOT / "test"
+REGISTER_CATALOG = RegisterCatalog(ROOT / "registers" / "devices")
 VERSION = "0.2.0"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
@@ -1051,6 +1053,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"metrics": RUNTIME.public_metrics(), "paused": RUNTIME.monitor_paused})
         if path == "/api/version":
             return self.json_response({"version": VERSION})
+        if path == "/api/registers/devices":
+            return self.json_response({"devices": REGISTER_CATALOG.summaries()})
         if path == "/api/diagnostics":
             return self.json_response(RUNTIME.diagnostics())
         if path == "/api/diagnostics/report":
@@ -1117,6 +1121,9 @@ class Handler(BaseHTTPRequestHandler):
                 command = str(data.get("command", "")).strip()
                 if not command: raise ValueError("命令不能为空")
                 return self.json_response(RUNTIME.start_job(command).public(), 201)
+            if self.path == "/api/registers/decode":
+                return self.json_response(REGISTER_CATALOG.decode(
+                    str(data.get("device", "")), data.get("register", ""), data.get("value", "")))
             if self.path in ("/api/diagnostic-session/start", "/api/diagnostics/session/start"):
                 return self.json_response({"session": RUNTIME.start_diagnostic_session(
                     str(data.get("name", "")))}, 201)
