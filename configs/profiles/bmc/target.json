@@ -4,6 +4,7 @@
   "port": 22,
   "user": "root",
   "connectTimeout": 8,
+  "terminalEncoding": "utf-8",
   "identityFile": "",
   "sshOptions": [
     "StrictHostKeyChecking=accept-new"

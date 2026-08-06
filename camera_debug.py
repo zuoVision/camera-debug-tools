@@ -5,26 +5,44 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import errno
 import hashlib
 import json
-import locale
 import os
+import posixpath
 import re
+import shlex
 import signal
-import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
 import webbrowser
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+from camera_debug_studio.config import (
+    ConfigValidationError, MODULE_FILES, SENSITIVE_KEYS, load_json, load_profile, redact, render,
+    validate_config as validate_profile_config, write_json,
+)
+from camera_debug_studio.jobs import Job, MAX_JOB_LINES, STATE_LOCK, now_ms
+from camera_debug_studio.http import read_websocket_message, token_authorized, websocket_frame
+from camera_debug_studio.monitoring import apply_parser_transforms, parse_metric_output
+from camera_debug_studio.register_catalog import RegisterCatalog
+from camera_debug_studio.terminal import TerminalSession
+from camera_debug_studio.transport import (
+    command_environment as build_command_environment,
+    scp_upload_command as build_scp_upload_command,
+    terminal_command as build_terminal_command,
+    transport_command as build_transport_command,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -32,253 +50,82 @@ WEB = ROOT / "web"
 CONFIG_DIR = ROOT / "configs"
 PROFILE_DIR = CONFIG_DIR / "profiles"
 TEST_DIR = ROOT / "test"
-MODULE_FILES = {
-    "project": "project.json",
-    "target": "target.json",
-    "variables": "variables.json",
-    "monitoring": "monitoring.json",
-    "topology": "topology.json",
-    "tests": "tests.json",
-}
-STATE_LOCK = threading.RLock()
+REGISTER_CATALOG = RegisterCatalog(ROOT / "registers" / "devices")
+VERSION = "0.2.0"
+MAX_BODY_BYTES = 1024 * 1024
+MAX_UPLOAD_BYTES = 24 * 1024 * 1024
+MAX_UPLOAD_REQUEST_BYTES = 34 * 1024 * 1024
+MAX_WS_BYTES = 1024 * 1024
+MAX_JOBS = 200
+MAX_CONCURRENT_JOBS = 8
+JOB_RETENTION_MS = 24 * 60 * 60 * 1000
+MAX_DIAGNOSTIC_EVENTS = 500
 
 
-def now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def load_profile(path: Path) -> Dict[str, Any]:
-    if path.is_file():
-        return load_json(path)
-    if not path.is_dir():
-        raise ValueError(f"平台配置不存在: {path}")
-    result: Dict[str, Any] = {}
-    defaults: Dict[str, Any] = {"variables": {}, "monitoring": {"metrics": []},
-                                "topology": {"nodes": [], "edges": []}, "tests": []}
-    for key, filename in MODULE_FILES.items():
-        module_path = path / filename
-        if module_path.is_file():
-            result[key] = load_json(module_path)
-        elif key in defaults:
-            result[key] = defaults[key]
-        else:
-            raise ValueError(f"平台配置缺少 {filename}")
-    local_target = path / "target.local.json"
-    if local_target.is_file():
-        override = load_json(local_target)
-        if not isinstance(override, dict):
-            raise ValueError("target.local.json 必须是 JSON 对象")
-        result["target"] = {**result["target"], **override}
-    return result
-
-
-def write_json(path: Path, data: Any) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    temporary.replace(path)
-
-
-def render(template: str, values: Dict[str, Any]) -> str:
-    """Replace {name} placeholders without interpreting shell syntax."""
-    def replace(match: re.Match[str]) -> str:
-        key = match.group(1)
-        if key not in values:
-            raise ValueError(f"缺少模板参数: {key}")
-        return str(values[key])
-    return re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, template)
-
-
-def apply_parser_transforms(value: Any, parser: Dict[str, Any]) -> Any:
-    """Apply optional transformations after extraction and before mapping."""
-    if "bit" not in parser:
-        return value
-    bit = parser["bit"]
-    if isinstance(bit, bool) or not isinstance(bit, int) or not 0 <= bit <= 63:
-        raise ValueError("parser.bit must be an integer from 0 to 63")
-    if isinstance(value, int):
-        numeric_value = value
-    elif isinstance(value, float) and value.is_integer():
-        numeric_value = int(value)
-    else:
-        raw_value = str(value).strip()
-        try:
-            numeric_value = int(raw_value, 0)
-        except ValueError:
-            # Base 0 rejects decimal strings with leading zeroes; those are
-            # still valid decimal register output.
-            numeric_value = int(raw_value, 10)
-    return (numeric_value >> bit) & 1
-
-
-@dataclass
-class Job:
-    id: str
-    kind: str
-    name: str
-    command: str
-    status: str = "running"
-    started_at: int = field(default_factory=now_ms)
-    ended_at: Optional[int] = None
-    exit_code: Optional[int] = None
-    lines: List[Dict[str, Any]] = field(default_factory=list)
-    process: Optional[subprocess.Popen] = None
-    argv: Optional[List[str]] = None
-    cwd: Optional[str] = None
-
-    def append(self, stream: str, text: str) -> None:
-        with STATE_LOCK:
-            self.lines.append({"time": now_ms(), "stream": stream, "text": text})
-            if len(self.lines) > 5000:
-                del self.lines[:1000]
-
-    def public(self, after: int = 0) -> Dict[str, Any]:
-        with STATE_LOCK:
-            return {
-                "id": self.id, "kind": self.kind, "name": self.name,
-                "command": self.command, "status": self.status,
-                "startedAt": self.started_at, "endedAt": self.ended_at,
-                "exitCode": self.exit_code, "cursor": len(self.lines),
-                "lines": self.lines[after:],
-            }
-
-
-class TerminalSession:
-    """One persistent PTY/pipe-backed local or SSH shell attached to a WebSocket."""
-
-    def __init__(self, runtime: "Runtime", send: Any):
-        self.runtime = runtime
-        self.send = send
-        self.closed = threading.Event()
-        self.master_fd: Optional[int] = None
-        self.encoding = str(runtime.config.get("target", {}).get(
-            "terminalEncoding", locale.getpreferredencoding(False) if os.name == "nt" else "utf-8"))
-        command = runtime.terminal_command()
-        if os.name == "nt":
-            self.process = subprocess.Popen(
-                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                env=runtime.command_environment(),
-            )
-            threading.Thread(target=self._pump_pipe, args=(self.process.stdout,), daemon=True).start()
-            threading.Thread(target=self._pump_pipe, args=(self.process.stderr,), daemon=True).start()
-            threading.Thread(target=self._wait_pipe, daemon=True).start()
-        else:
-            self.master_fd, slave_fd = os.openpty()
-            self.process = subprocess.Popen(
-                command, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-                start_new_session=True, close_fds=True,
-                env=runtime.command_environment(),
-            )
-            os.close(slave_fd)
-            threading.Thread(target=self._pump_pty, daemon=True).start()
-
-    def _emit(self, chunk: bytes) -> None:
-        self.send({"type": "output", "data": chunk.decode(self.encoding, "replace")})
-
-    def _pump_pty(self) -> None:
-        try:
-            while not self.closed.is_set():
-                chunk = os.read(self.master_fd, 4096)  # type: ignore[arg-type]
-                if not chunk:
-                    break
-                self._emit(chunk)
-        except OSError:
-            pass
-        finally:
-            code = self.process.poll()
-            if code is None:
-                code = self.process.wait()
-            if not self.closed.is_set():
-                try:
-                    self.send({"type": "exit", "code": code})
-                except OSError:
-                    pass
-            self.closed.set()
-
-    def _pump_pipe(self, stream: Any) -> None:
-        try:
-            while not self.closed.is_set():
-                chunk = stream.read1(4096) if hasattr(stream, "read1") else stream.read(4096)
-                if not chunk:
-                    break
-                self._emit(chunk)
-        except OSError:
-            pass
-
-    def _wait_pipe(self) -> None:
-        code = self.process.wait()
-        if not self.closed.is_set():
-            try:
-                self.send({"type": "exit", "code": code})
-            except OSError:
-                pass
-        self.closed.set()
-
-    def input(self, data: str) -> None:
-        if self.closed.is_set():
-            return
-        if os.name == "nt":
-            if data == "\x03":
-                try:
-                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
-                except OSError:
-                    pass
-            elif self.process.stdin:
-                if data == "\r":
-                    data = "\r\n"
-                self.process.stdin.write(data.encode(self.encoding, "replace"))
-                self.process.stdin.flush()
-        else:
-            os.write(self.master_fd, data.encode("utf-8"))  # type: ignore[arg-type]
-
-    def resize(self, columns: int, rows: int) -> None:
-        if os.name == "nt" or self.master_fd is None:
-            return
-        import fcntl
-        import termios
-        columns = max(20, min(400, columns))
-        rows = max(5, min(200, rows))
-        fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
-
-    def close(self) -> None:
-        if self.closed.is_set():
-            return
-        self.closed.set()
-        if os.name == "nt":
-            try:
-                self.process.terminate()
-            except OSError:
-                pass
-        else:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                os.close(self.master_fd)  # type: ignore[arg-type]
-            except OSError:
-                pass
+class ApiError(ValueError):
+    def __init__(self, message: str, code: str = "bad_request", details: Any = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details
 
 
 class Runtime:
     def __init__(self, config_path: Path):
         self.config_path = config_path
         self.config = load_profile(config_path)
+        self.validate_config(self.config)
         self.jobs: Dict[str, Job] = {}
         self.terminal_sessions: set[TerminalSession] = set()
         self.metrics: Dict[str, Dict[str, Any]] = {}
         self.monitor_stop = threading.Event()
         self.monitor_thread: Optional[threading.Thread] = None
+        self.monitor_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="metric")
+        self.metric_running: set[str] = set()
+        self.metric_batch_cache: Dict[str, Dict[str, Any]] = {}
+        self.metric_batch_locks: Dict[str, threading.Lock] = {}
+        self.config_generation = 0
+        self.monitor_paused = False
+        self.job_slots = threading.BoundedSemaphore(MAX_CONCURRENT_JOBS)
+        self.recent_errors: List[Dict[str, Any]] = []
+        self.diagnostic_session: Optional[Dict[str, Any]] = None
+        self.started_at = now_ms()
 
     def reload(self) -> None:
-        self.config = load_profile(self.config_path)
+        data = load_profile(self.config_path)
+        self.validate_config(data)
+        self._replace_config(self.config_path, data)
+
+    def record_error(self, area: str, message: str, code: str = "runtime_error") -> None:
+        with STATE_LOCK:
+            self.recent_errors.append({"time": now_ms(), "area": area, "code": code,
+                                       "message": str(message)[:500]})
+            del self.recent_errors[:-50]
+
+    def close_sessions(self) -> None:
+        with STATE_LOCK:
+            sessions = list(self.terminal_sessions)
+        for session in sessions:
+            session.close()
+
+    def _replace_config(self, path: Path, data: Dict[str, Any]) -> None:
+        self.close_sessions()
+        with STATE_LOCK:
+            self.config_generation += 1
+            self.config_path = path
+            self.config = data
+            self.metrics.clear()
+            self.metric_running.clear()
+            self.metric_batch_cache.clear()
+            self.metric_batch_locks.clear()
+        self._record_diagnostic_event("profile_changed", {
+            "profile": data.get("project", {}).get("name", path.name),
+            "transport": data.get("target", {}).get("transport", "ssh"),
+        })
+
+    def safe_config(self) -> Dict[str, Any]:
+        safe = redact(copy.deepcopy(self.config))
+        safe["configPath"] = str(self.config_path)
+        return safe
 
     def profiles(self) -> List[Dict[str, Any]]:
         result = []
@@ -312,54 +159,22 @@ class Runtime:
             raise ValueError("配置文件不存在")
         data = load_profile(target_path)
         self.validate_config(data)
-        self.config_path = target_path
-        self.config = data
-        self.metrics.clear()
+        self._replace_config(target_path, data)
 
     @staticmethod
     def validate_config(data: Dict[str, Any]) -> None:
-        if not isinstance(data, dict):
-            raise ValueError("配置根节点必须是 JSON 对象")
-        if not isinstance(data.get("target"), dict):
-            raise ValueError("缺少 target 配置")
-        monitoring = data.get("monitoring", {})
-        if not isinstance(monitoring, dict) or not isinstance(monitoring.get("metrics", []), list):
-            raise ValueError("monitoring.metrics 必须是数组")
-        if not isinstance(data.get("tests", []), list):
-            raise ValueError("tests 必须是数组")
-        ids = set()
-        for metric in monitoring.get("metrics", []):
-            if not isinstance(metric, dict) or not metric.get("id") or not metric.get("command"):
-                raise ValueError("每个监控指标必须包含 id 和 command")
-            if metric["id"] in ids:
-                raise ValueError(f"监控指标 id 重复: {metric['id']}")
-            parser = metric.get("parser", {})
-            if "bit" in parser:
-                bit = parser["bit"]
-                if isinstance(bit, bool) or not isinstance(bit, int) or not 0 <= bit <= 63:
-                    raise ValueError(f"监控指标 {metric['id']} 的 parser.bit 必须是 0 到 63 的整数")
-            ids.add(metric["id"])
-        topology = data.get("topology")
-        if topology is not None:
-            if not isinstance(topology, dict) or not isinstance(topology.get("nodes"), list) or not isinstance(topology.get("edges"), list):
-                raise ValueError("topology.nodes 和 topology.edges 必须是数组")
-            node_ids = {node.get("id") for node in topology["nodes"] if isinstance(node, dict)}
-            if None in node_ids or len(node_ids) != len(topology["nodes"]):
-                raise ValueError("拓扑节点必须包含不重复的 id")
-            if any(not re.fullmatch(r"[A-Za-z0-9_-]+", str(node_id)) for node_id in node_ids):
-                raise ValueError("拓扑节点 id 只能包含字母、数字、下划线和连字符")
-            for node in topology["nodes"]:
-                try:
-                    x, y = float(node.get("x")), float(node.get("y"))
-                except (TypeError, ValueError):
-                    raise ValueError("拓扑节点必须包含数值坐标 x 和 y")
-                if not 0 <= x <= 100 or not 0 <= y <= 100:
-                    raise ValueError("拓扑节点坐标必须在 0 到 100 之间")
-            for edge in topology["edges"]:
-                if not isinstance(edge, dict) or edge.get("from") not in node_ids or edge.get("to") not in node_ids:
-                    raise ValueError("拓扑连接引用了不存在的节点")
+        return validate_profile_config(data)
 
     def save_config(self, data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            raise ValueError("config 必须是 JSON 对象")
+        data = copy.deepcopy(data)
+        incoming_target = data.get("target", {})
+        if not isinstance(incoming_target, dict):
+            raise ValueError("target 必须是 JSON 对象")
+        incoming_target.pop("passwordConfigured", None)
+        if "password" not in incoming_target and self.config.get("target", {}).get("password"):
+            incoming_target["password"] = self.config["target"]["password"]
         self.validate_config(data)
         if self.config_path.is_dir():
             for key, filename in MODULE_FILES.items():
@@ -370,8 +185,70 @@ class Runtime:
                     write_json(self.config_path / filename, value)
         else:
             write_json(self.config_path, data)
-        self.config = data
-        self.metrics.clear()
+        self._replace_config(self.config_path, data)
+
+    def preview_config(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate an editor payload without changing files or runtime state."""
+        if not isinstance(data, dict):
+            raise ConfigValidationError("config 必须是 JSON 对象", "$")
+        candidate = copy.deepcopy(data)
+        candidate.pop("configPath", None)
+        incoming_target = candidate.get("target")
+        if not isinstance(incoming_target, dict):
+            raise ConfigValidationError("target 必须是 JSON 对象", "target")
+        incoming_target.pop("passwordConfigured", None)
+        if "password" not in incoming_target and self.config.get("target", {}).get("password"):
+            incoming_target["password"] = self.config["target"]["password"]
+        self.validate_config(candidate)
+        return redact(candidate)
+
+    def copy_profile(self, source: str, destination: str, display_name: str = "") -> Dict[str, Any]:
+        """Create a credential-free modular profile using an atomic directory rename."""
+        name_pattern = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
+        if not re.fullmatch(name_pattern, source or ""):
+            raise ApiError("源 Profile 名称无效", "invalid_profile_name", {"path": "sourceFile"})
+        if not re.fullmatch(name_pattern, destination or "") or destination in (".", ".."):
+            raise ApiError("目标 Profile 名称无效", "invalid_profile_name", {"path": "file"})
+        source_path = (PROFILE_DIR / source).resolve()
+        destination_path = (PROFILE_DIR / destination).resolve()
+        profile_root = PROFILE_DIR.resolve()
+        if profile_root not in source_path.parents or not source_path.is_dir():
+            raise ApiError("源 Profile 不存在", "profile_not_found", {"path": "sourceFile"})
+        if profile_root not in destination_path.parents:
+            raise ApiError("目标 Profile 路径无效", "invalid_profile_name", {"path": "file"})
+        temporary_path: Optional[Path] = None
+        with STATE_LOCK:
+            if destination_path.exists():
+                raise ApiError("目标 Profile 已存在", "profile_conflict", {"path": "file"})
+            temporary_path = Path(tempfile.mkdtemp(prefix=f".{destination}.tmp-", dir=str(PROFILE_DIR)))
+            try:
+                for key, filename in MODULE_FILES.items():
+                    source_file = source_path / filename
+                    if source_file.is_file():
+                        value = redact(load_json(source_file))
+                    elif key in ("variables", "monitoring", "topology", "tests"):
+                        value = {"variables": {}, "monitoring": {"metrics": []},
+                                 "topology": {"nodes": [], "edges": []}, "tests": []}[key]
+                    else:
+                        raise ApiError(f"源 Profile 缺少 {filename}", "invalid_source_profile")
+                    if key == "target" and isinstance(value, dict):
+                        value.pop("passwordConfigured", None)
+                    if key == "project" and display_name:
+                        if not isinstance(value, dict):
+                            raise ApiError("project.json 必须是 JSON 对象", "invalid_source_profile")
+                        value["name"] = str(display_name)[:100]
+                    write_json(temporary_path / filename, value)
+                self.validate_config(load_profile(temporary_path))
+                temporary_path.rename(destination_path)
+                temporary_path = None
+            finally:
+                if temporary_path and temporary_path.exists():
+                    for child in temporary_path.iterdir():
+                        child.unlink()
+                    temporary_path.rmdir()
+        copied = load_profile(destination_path)
+        return {"file": destination, "name": copied.get("project", {}).get("name", destination),
+                "platform": copied.get("project", {}).get("platform", "通用")}
 
     def write_target(self, target: Dict[str, Any]) -> None:
         if not self.config_path.is_dir():
@@ -410,108 +287,188 @@ class Runtime:
                 raise ValueError("端口或超时时间超出范围")
             target.update({"host": host, "user": user, "port": port,
                            "connectTimeout": timeout, "identityFile": identity})
-            target["password"] = str(values.get("password", ""))
+            supplied_password = str(values.get("password", ""))
+            if supplied_password:
+                target["password"] = supplied_password
+            elif values.get("clearPassword"):
+                target["password"] = ""
             target["sshOptions"] = ["StrictHostKeyChecking=accept-new"]
         else:
             target["localShell"] = str(values.get("localShell", target.get("localShell", "/bin/sh")))
-        self.config["target"] = target
+        data = dict(self.config)
+        data["target"] = target
         if self.config_path.is_dir():
             self.write_target(target)
         else:
-            write_json(self.config_path, self.config)
-        self.metrics.clear()
-        return target
+            write_json(self.config_path, data)
+        self._replace_config(self.config_path, data)
+        return redact(target)
 
     def command_environment(self) -> Dict[str, str]:
-        environment = dict(os.environ)
-        password = str(self.config.get("target", {}).get("password", ""))
-        if self.config.get("target", {}).get("transport") == "ssh" and password:
-            askpass_script = str(ROOT / "ssh_askpass.py")
-            # Windows OpenSSH uses CreateProcess for SSH_ASKPASS and cannot
-            # execute a .py file directly. Include the running interpreter so
-            # password authentication works regardless of file associations.
-            askpass = (subprocess.list2cmdline([sys.executable, askpass_script])
-                       if os.name == "nt" else askpass_script)
-            environment.update({
-                "SSH_ASKPASS": askpass,
-                "SSH_ASKPASS_REQUIRE": "force",
-                "CAMERA_DEBUG_SSH_PASSWORD": password,
-                "DISPLAY": environment.get("DISPLAY", "camera-debug:0"),
-            })
-        return environment
+        return build_command_environment(self.config, ROOT)
 
     def transport_command(self, remote_command: str) -> List[str]:
-        target = self.config.get("target", {})
-        mode = target.get("transport", "ssh")
-        if mode == "local":
-            shell = target.get("localShell")
-            if os.name == "nt":
-                if not shell or str(shell).replace("\\", "/").endswith(("/sh", "/bash", "/zsh")):
-                    shell = os.environ.get("COMSPEC", "cmd.exe")
-                name = str(shell).replace("\\", "/").rsplit("/", 1)[-1].lower()
-                if name in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
-                    return [str(shell), "-NoLogo", "-NoProfile", "-Command", remote_command]
-                return [str(shell), "/d", "/s", "/c", remote_command]
-            if shell:
-                return [shell, "-lc", remote_command]
-            return ["sh", "-lc", remote_command]
-        if mode != "ssh":
-            raise ValueError(f"不支持的 transport: {mode}")
-        host = target.get("host", "")
-        if not host:
-            raise ValueError("SSH host 未配置")
-        user = target.get("user", "")
-        destination = f"{user}@{host}" if user else host
-        argv = [target.get("sshBinary", "ssh"), "-p", str(target.get("port", 22))]
-        argv += ["-o", f"ConnectTimeout={int(target.get('connectTimeout', 8))}"]
-        argv += ["-o", "ServerAliveInterval=15"]
-        if target.get("identityFile"):
-            argv += ["-i", os.path.expanduser(target["identityFile"])]
-        for option in target.get("sshOptions", []):
-            argv += ["-o", str(option)]
-        if target.get("password"):
-            argv += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]
-        else:
-            argv += ["-o", "BatchMode=yes"]
-        return argv + [destination, remote_command]
+        return build_transport_command(self.config, remote_command)
+
+    @staticmethod
+    def parse_sftp_listing(output: str, directory: str) -> List[Dict[str, Any]]:
+        entries = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line or line.startswith("total "):
+                continue
+            fields = line.split(None, 8)
+            if len(fields) < 9 or not fields[0] or fields[0][0] not in "-dlcbps":
+                continue
+            mode, size_text, name = fields[0], fields[4], fields[8]
+            if name in (".", ".."):
+                continue
+            if mode.startswith("l") and " -> " in name:
+                name = name.split(" -> ", 1)[0]
+            try:
+                size = int(size_text)
+            except ValueError:
+                size = 0
+            entries.append({
+                "name": name,
+                "path": posixpath.join(directory.rstrip("/") or "/", name),
+                "type": "directory" if mode.startswith("d") else "file",
+                "size": size,
+                "mode": mode,
+                "modified": " ".join(fields[5:8]),
+            })
+        return sorted(entries, key=lambda item: (item["type"] != "directory", item["name"].lower()))
+
+    def sftp_list(self, directory: str) -> Dict[str, Any]:
+        if self.config.get("target", {}).get("transport", "ssh") != "ssh":
+            raise ApiError("SFTP 文件浏览仅适用于 SSH 目标", "sftp_requires_ssh")
+        directory = directory.strip() or "/"
+        if not directory.startswith("/") or "\x00" in directory or "\r" in directory or "\n" in directory:
+            raise ApiError("远程目录必须是绝对路径", "invalid_remote_path")
+        directory = posixpath.normpath(directory)
+        command = f"LC_ALL=C ls -lan -- {shlex.quote(directory)}"
+        try:
+            result = subprocess.run(
+                self.transport_command(command), capture_output=True, timeout=20,
+                env=self.command_environment(), encoding="utf-8", errors="replace",
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ApiError("读取远程目录超时", "sftp_timeout") from exc
+        except OSError as exc:
+            raise ApiError(f"无法启动 SSH：{exc}", "sftp_unavailable") from exc
+        if result.returncode != 0:
+            raise ApiError((result.stderr or result.stdout or "无法读取远程目录").strip(), "sftp_list_failed")
+        return {
+            "path": directory,
+            "parent": posixpath.dirname(directory.rstrip("/")) or "/",
+            "entries": self.parse_sftp_listing(result.stdout, directory),
+        }
+
+    def sftp_upload(self, directory: str, name: str, encoded: str) -> Dict[str, Any]:
+        if self.config.get("target", {}).get("transport", "ssh") != "ssh":
+            raise ApiError("SFTP 上传仅适用于 SSH 目标", "sftp_requires_ssh")
+        directory = posixpath.normpath(directory.strip() or "/")
+        name = name.strip()
+        if (not directory.startswith("/") or not name or name in (".", "..") or
+                posixpath.basename(name) != name or any(char in directory + name for char in "\x00\r\n")):
+            raise ApiError("远程上传路径无效", "invalid_remote_path")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ApiError("上传内容不是有效的 Base64", "invalid_upload") from exc
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ApiError(f"单个文件不能超过 {MAX_UPLOAD_BYTES // 1024 // 1024} MB", "upload_too_large")
+        suffix = Path(name).suffix[:16]
+        temporary = tempfile.NamedTemporaryFile(prefix="camera_debug_upload_", suffix=suffix, delete=False)
+        temporary_path = Path(temporary.name)
+        try:
+            temporary.write(content)
+            temporary.close()
+            remote_path = posixpath.join(directory.rstrip("/") or "/", name)
+            try:
+                result = subprocess.run(
+                    build_scp_upload_command(self.config, str(temporary_path), remote_path),
+                    capture_output=True, timeout=120, env=self.command_environment(),
+                    encoding="utf-8", errors="replace",
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ApiError("上传远程文件超时", "sftp_timeout") from exc
+            except OSError as exc:
+                raise ApiError(f"无法启动 SCP：{exc}", "sftp_unavailable") from exc
+            if result.returncode != 0:
+                raise ApiError((result.stderr or result.stdout or "上传失败").strip(), "sftp_upload_failed")
+            return {"ok": True, "path": remote_path, "size": len(content)}
+        finally:
+            temporary.close()
+            temporary_path.unlink(missing_ok=True)
+
+    def platform_scripts(self) -> Dict[str, Any]:
+        script_root = self.config_path / "scripts" if self.config_path.is_dir() else self.config_path.parent / f"{self.config_path.stem}-scripts"
+        items = []
+        if script_root.is_dir():
+            for path in sorted(script_root.rglob("*")):
+                if not path.is_file() or path.suffix.lower() not in (".bat", ".sh"):
+                    continue
+                relative = path.relative_to(script_root).as_posix()
+                items.append({"id": relative, "name": path.stem, "type": path.suffix.lower()[1:],
+                              "path": relative})
+        return {"items": items, "count": len(items), "directory": str(script_root)}
+
+    def start_platform_script(self, script_id: str) -> Job:
+        scripts = {item["id"]: item for item in self.platform_scripts()["items"]}
+        spec = scripts.get(script_id)
+        if not spec:
+            raise ValueError("未知或已变化的平台脚本，请刷新脚本列表")
+        script_root = self.config_path / "scripts" if self.config_path.is_dir() else self.config_path.parent / f"{self.config_path.stem}-scripts"
+        path = (script_root / script_id).resolve()
+        if script_root.resolve() not in path.parents or not path.is_file():
+            raise ValueError("平台脚本路径无效")
+        if spec["type"] == "bat":
+            if os.name != "nt":
+                raise ValueError("BAT 脚本只能在 Windows 主机运行")
+            return self.start_job(str(path), "platform-script", f"本地 BAT · {spec['name']}",
+                                  argv=[os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", str(path)],
+                                  cwd=str(path.parent))
+        remote_path = f"/tmp/camera_debug_{uuid.uuid4().hex[:10]}_{re.sub(r'[^A-Za-z0-9_.-]', '_', path.name)}"
+        upload = build_scp_upload_command(self.config, str(path), remote_path)
+        remote_command = f"chmod +x {remote_path} && sh {remote_path}; rc=$?; rm -f {remote_path}; exit $rc"
+        return self.start_job(remote_command, "platform-script", f"远端 SH · {spec['name']}",
+                              argv=self.transport_command(remote_command), pre_argv=[upload],
+                              encoding="utf-8")
 
     def terminal_command(self) -> List[str]:
         """Build a persistent interactive shell command for a PTY session."""
-        target = self.config.get("target", {})
-        mode = target.get("transport", "ssh")
-        if mode == "local":
-            if os.name == "nt":
-                shell = target.get("localShell")
-                if not shell or str(shell).replace("\\", "/").endswith(("/sh", "/bash", "/zsh")):
-                    shell = os.environ.get("COMSPEC", "cmd.exe")
-                name = str(shell).replace("\\", "/").rsplit("/", 1)[-1].lower()
-                return [str(shell), "-NoLogo"] if name in ("powershell", "powershell.exe", "pwsh", "pwsh.exe") else [str(shell), "/Q"]
-            shell = target.get("localShell") or os.environ.get("SHELL", "/bin/sh")
-            return [shell, "-l"]
-        if mode != "ssh":
-            raise ValueError(f"不支持的 transport: {mode}")
-        host = target.get("host", "")
-        if not host:
-            raise ValueError("SSH host 未配置")
-        user = target.get("user", "")
-        destination = f"{user}@{host}" if user else host
-        argv = [target.get("sshBinary", "ssh"), "-tt", "-p", str(target.get("port", 22))]
-        argv += ["-o", f"ConnectTimeout={int(target.get('connectTimeout', 8))}"]
-        argv += ["-o", "ServerAliveInterval=15"]
-        if target.get("identityFile"):
-            argv += ["-i", os.path.expanduser(target["identityFile"])]
-        for option in target.get("sshOptions", []):
-            argv += ["-o", str(option)]
-        if target.get("password"):
-            argv += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]
-        else:
-            argv += ["-o", "BatchMode=yes"]
-        return argv + [destination]
+        return build_terminal_command(self.config)
 
-    def start_job(self, command: str, kind: str = "command", name: str = "命令") -> Job:
-        job = Job(uuid.uuid4().hex[:12], kind, name, command)
+    def _prune_jobs(self) -> None:
+        cutoff = now_ms() - JOB_RETENTION_MS
         with STATE_LOCK:
+            finished = [job for job in self.jobs.values() if job.ended_at]
+            remove = {job.id for job in finished if (job.ended_at or 0) < cutoff}
+            for job in sorted(finished, key=lambda item: item.ended_at or 0)[:-MAX_JOBS]:
+                remove.add(job.id)
+            for job_id in remove:
+                self.jobs.pop(job_id, None)
+
+    def start_job(self, command: str, kind: str = "command", name: str = "命令",
+                  timeout: Optional[float] = None,
+                  expected_exit_codes: Optional[List[int]] = None,
+                  argv: Optional[List[str]] = None, cwd: Optional[str] = None,
+                  pre_argv: Optional[List[List[str]]] = None,
+                  encoding: Optional[str] = None) -> Job:
+        self._prune_jobs()
+        with STATE_LOCK:
+            active = sum(job.status in ("queued", "running", "stopping") for job in self.jobs.values())
+            if active >= MAX_CONCURRENT_JOBS:
+                raise ApiError("并发任务已达到上限，请等待当前任务结束", "job_limit")
+            job = Job(uuid.uuid4().hex[:12], kind, name, command, timeout=timeout,
+                      expected_exit_codes=expected_exit_codes or [0], argv=argv,
+                      pre_argv=pre_argv or [], cwd=cwd, encoding=encoding)
             self.jobs[job.id] = job
+        self._record_diagnostic_event("job_created", {
+            "jobId": job.id, "kind": job.kind, "name": job.name,
+            "status": job.status, "command": job.command,
+        })
         threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
         return job
 
@@ -519,9 +476,12 @@ class Runtime:
         TEST_DIR.mkdir(exist_ok=True)
         python = self.pytest_python()
         argv = [python, "-m", "pytest", "--collect-only", "-q", TEST_DIR.name]
+        environment = self.command_environment()
+        environment.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
         try:
             result = subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True,
-                                    timeout=30, errors="replace")
+                                    timeout=30, errors="replace", env=environment,
+                                    encoding="utf-8")
         except subprocess.TimeoutExpired:
             raise ValueError("Pytest 用例收集超时（30 秒）")
         output = (result.stdout + "\n" + result.stderr).strip()
@@ -540,12 +500,8 @@ class Runtime:
         if node_id not in collected["items"]:
             raise ValueError("未知或已变化的 Pytest 用例，请刷新用例列表")
         argv = [self.pytest_python(), "-m", "pytest", "-v", "--color=no", node_id]
-        job = Job(uuid.uuid4().hex[:12], "pytest", f"Pytest · {node_id}",
-                  " ".join(argv), argv=argv, cwd=str(ROOT))
-        with STATE_LOCK:
-            self.jobs[job.id] = job
-        threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
-        return job
+        return self.start_job(" ".join(argv), "pytest", f"Pytest · {node_id}",
+                              argv=argv, cwd=str(ROOT))
 
     @staticmethod
     def pytest_python() -> str:
@@ -560,16 +516,49 @@ class Runtime:
         return next((path for path in candidates if path and Path(path).is_file()), sys.executable)
 
     def _run_job(self, job: Job) -> None:
+        acquired = self.job_slots.acquire(timeout=1)
+        if not acquired:
+            job.status = "failed"
+            job.stop_reason = "concurrency_limit"
+            job.append("stderr", "并发任务槽位不可用")
+            job.ended_at = now_ms()
+            self._record_diagnostic_event("job_finished", {
+                "jobId": job.id, "kind": job.kind, "name": job.name,
+                "status": job.status, "exitCode": job.exit_code,
+                "stopReason": job.stop_reason,
+                "durationMs": job.ended_at - job.started_at,
+            })
+            return
         try:
+            if job.status == "stopping":
+                job.status = "stopped"
+                return
+            environment = self.command_environment()
+            for pre_argv in job.pre_argv:
+                job.append("stdout", f"[准备] {subprocess.list2cmdline(pre_argv)}")
+                prepared = subprocess.run(pre_argv, capture_output=True, text=True, errors="replace",
+                                          timeout=60, env=environment)
+                for line in prepared.stdout.splitlines():
+                    job.append("stdout", line)
+                for line in prepared.stderr.splitlines():
+                    job.append("stderr", line)
+                if prepared.returncode != 0:
+                    job.status = "failed"
+                    job.exit_code = prepared.returncode
+                    return
             argv = job.argv or self.transport_command(job.command)
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            if job.kind == "pytest":
+                environment.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
             process = subprocess.Popen(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1, errors="replace", creationflags=flags,
-                start_new_session=(os.name != "nt"), env=self.command_environment(),
+                start_new_session=(os.name != "nt"), env=environment,
+                encoding=job.encoding or ("utf-8" if job.kind == "pytest" else None),
                 cwd=job.cwd,
             )
             job.process = process
+            job.status = "running"
             def pump(stream: Any, label: str) -> None:
                 for line in iter(stream.readline, ""):
                     job.append(label, line.rstrip("\r\n"))
@@ -579,10 +568,23 @@ class Runtime:
                 threading.Thread(target=pump, args=(process.stderr, "stderr"), daemon=True),
             ]
             for thread in threads: thread.start()
-            code = process.wait()
+            try:
+                code = process.wait(timeout=job.timeout)
+            except subprocess.TimeoutExpired:
+                job.status = "timed_out"
+                job.stop_reason = "timeout"
+                self._terminate_process(job, force=False)
+                try:
+                    code = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._terminate_process(job, force=True)
+                    code = process.wait()
             for thread in threads: thread.join(timeout=1)
             job.exit_code = code
-            job.status = "success" if code == 0 else ("stopped" if job.status == "stopping" else "failed")
+            if job.status == "stopping":
+                job.status = "stopped"
+            elif job.status != "timed_out":
+                job.status = "success" if code in job.expected_exit_codes else "failed"
         except Exception as exc:
             job.append("stderr", str(exc))
             job.status = "failed"
@@ -590,19 +592,40 @@ class Runtime:
         finally:
             job.ended_at = now_ms()
             job.process = None
+            self._record_diagnostic_event("job_finished", {
+                "jobId": job.id, "kind": job.kind, "name": job.name,
+                "status": job.status, "exitCode": job.exit_code,
+                "stopReason": job.stop_reason,
+                "durationMs": job.ended_at - job.started_at,
+            })
+            self.job_slots.release()
+
+    @staticmethod
+    def _terminate_process(job: Job, force: bool) -> None:
+        if not job.process:
+            return
+        try:
+            if os.name == "nt":
+                job.process.kill() if force else job.process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                os.killpg(job.process.pid, signal.SIGKILL if force else signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
 
     def stop_job(self, job_id: str) -> bool:
         job = self.jobs.get(job_id)
-        if not job or not job.process or job.status != "running":
+        if not job or job.status not in ("queued", "running"):
             return False
         job.status = "stopping"
-        try:
-            if os.name == "nt":
-                job.process.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                os.killpg(job.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        job.stop_reason = "user"
+        if not job.process:
+            return True
+        self._terminate_process(job, force=False)
+        def force_later() -> None:
+            time.sleep(2)
+            if job.process and job.process.poll() is None:
+                self._terminate_process(job, force=True)
+        threading.Thread(target=force_later, daemon=True).start()
         return True
 
     def run_test(self, test_id: str, params: Dict[str, Any]) -> Job:
@@ -625,37 +648,96 @@ class Runtime:
                 raise ValueError(f"参数 {key} 不在允许范围内")
             validated[key] = value
         command = render(test["command"], validated)
-        return self.start_job(command, "test", test.get("name", test_id))
+        precheck = str(test.get("precheck", "")).strip()
+        if precheck:
+            result = subprocess.run(self.transport_command(render(precheck, validated)), capture_output=True,
+                                    text=True, timeout=min(float(test.get("timeout", 10) or 10), 30),
+                                    errors="replace", env=self.command_environment())
+            if result.returncode != 0:
+                raise ApiError((result.stderr or result.stdout or "测试前置检查失败").strip(), "precheck_failed")
+        return self.start_job(command, "test", test.get("name", test_id),
+                              float(test.get("timeout")) if test.get("timeout") else None,
+                              test.get("expectedExitCodes", [0]))
 
-    def query_metric(self, metric: Dict[str, Any]) -> Dict[str, Any]:
+    def _query_metric_command(self, metric: Dict[str, Any]) -> Dict[str, Any]:
         command = render(metric["command"], self.config.get("variables", {}))
+        started = now_ms()
+        batch = str(metric.get("batch", "")).strip()
+        lock = None
+        if batch:
+            with STATE_LOCK:
+                lock = self.metric_batch_locks.setdefault(batch, threading.Lock())
+            lock.acquire()
+            cached = self.metric_batch_cache.get(batch)
+            cache_seconds = float(metric.get("batchCache", 1.0))
+            if (cached and cached.get("command") == command
+                    and time.monotonic() - cached["cachedAt"] <= cache_seconds):
+                lock.release()
+                return cached["result"]
+        previous = self.metrics.get(metric["id"], {})
         try:
             result = subprocess.run(self.transport_command(command), capture_output=True, text=True,
                                     timeout=float(metric.get("timeout", 5)), errors="replace",
                                     env=self.command_environment())
             output = (result.stdout + "\n" + result.stderr).strip()
-            parser = metric.get("parser", {"type": "text"})
-            parser_type = parser.get("type", "text")
-            if parser_type == "regex":
-                match = re.search(parser["pattern"], output, re.MULTILINE)
-                if not match:
-                    raise ValueError("输出不匹配正则")
-                value: Any = match.group(int(parser.get("group", 1)))
-            elif parser_type == "number":
-                match = re.search(parser.get("pattern", r"[-+]?\d+(?:\.\d+)?"), output)
-                if not match:
-                    raise ValueError("未找到数值")
-                value = float(match.group(0))
-            else:
-                value = output
-            value = apply_parser_transforms(value, parser)
-            mapping = parser.get("map", {})
-            value = mapping.get(str(value), value)
-            return {"id": metric["id"], "value": value, "ok": result.returncode == 0,
-                    "raw": output, "updatedAt": now_ms()}
+            command_result = {"ok": result.returncode == 0, "raw": output,
+                              "durationMs": now_ms() - started,
+                              "errorCode": None if result.returncode == 0 else "nonzero_exit"}
+        except subprocess.TimeoutExpired as exc:
+            command_result = {"ok": False, "raw": "", "error": str(exc), "errorCode": "timeout",
+                              "durationMs": now_ms() - started}
         except Exception as exc:
-            return {"id": metric["id"], "value": "--", "ok": False,
-                    "error": str(exc), "updatedAt": now_ms()}
+            command_result = {"ok": False, "raw": "", "error": str(exc),
+                              "errorCode": "transport", "durationMs": now_ms() - started}
+        finally:
+            if batch and lock:
+                self.metric_batch_cache[batch] = {"command": command, "cachedAt": time.monotonic(),
+                                                  "result": command_result}
+                lock.release()
+        return command_result
+
+    def query_metric(self, metric: Dict[str, Any]) -> Dict[str, Any]:
+        started = now_ms()
+        previous = self.metrics.get(metric["id"], {})
+        command_result = self._query_metric_command(metric)
+        try:
+            if not command_result["ok"]:
+                return {"id": metric["id"], "value": "--", "ok": False,
+                        "error": command_result.get("error", command_result.get("raw", "")),
+                        "errorCode": command_result.get("errorCode", "nonzero_exit"),
+                        "durationMs": command_result["durationMs"],
+                        "failureCount": int(previous.get("failureCount", 0)) + 1,
+                        "updatedAt": now_ms()}
+            value = parse_metric_output(metric.get("parser", {"type": "text"}), command_result["raw"])
+            return {"id": metric["id"], "value": value, "ok": True,
+                    "raw": command_result["raw"], "durationMs": now_ms() - started,
+                    "failureCount": 0, "errorCode": None, "updatedAt": now_ms()}
+        except Exception as exc:
+            self.record_error("metric", f"{metric['id']}: {exc}", "metric_error")
+            return {"id": metric["id"], "value": "--", "ok": False, "error": str(exc),
+                    "errorCode": "parse_or_transport", "durationMs": now_ms() - started,
+                    "failureCount": int(previous.get("failureCount", 0)) + 1, "updatedAt": now_ms()}
+
+    def _collect_metric(self, metric: Dict[str, Any], generation: int) -> None:
+        key = metric["id"]
+        accepted = False
+        try:
+            result = self.query_metric(metric)
+            with STATE_LOCK:
+                if generation == self.config_generation:
+                    self.metrics[key] = result
+                    accepted = True
+            if accepted:
+                self._record_diagnostic_event("metric_snapshot", {
+                    "metricId": key, "value": result.get("value"),
+                    "ok": result.get("ok", False), "errorCode": result.get("errorCode"),
+                    "durationMs": result.get("durationMs"),
+                    "failureCount": result.get("failureCount", 0),
+                })
+        finally:
+            with STATE_LOCK:
+                if generation == self.config_generation:
+                    self.metric_running.discard(key)
 
     def start_monitor(self) -> None:
         if self.monitor_thread and self.monitor_thread.is_alive():
@@ -664,22 +746,213 @@ class Runtime:
         def loop() -> None:
             next_run: Dict[str, float] = {}
             while not self.monitor_stop.is_set():
-                for metric in self.config.get("monitoring", {}).get("metrics", []):
+                if self.monitor_paused:
+                    self.monitor_stop.wait(0.2)
+                    continue
+                for metric in list(self.config.get("monitoring", {}).get("metrics", [])):
                     if not metric.get("enabled", True): continue
                     key = metric["id"]
-                    if time.monotonic() >= next_run.get(key, 0):
-                        self.metrics[key] = self.query_metric(metric)
+                    with STATE_LOCK:
+                        due = time.monotonic() >= next_run.get(key, 0)
+                        if due and key not in self.metric_running:
+                            self.metric_running.add(key)
+                            generation = self.config_generation
+                        else:
+                            generation = None
+                    if generation is not None:
+                        self.monitor_pool.submit(self._collect_metric, copy.deepcopy(metric), generation)
                         next_run[key] = time.monotonic() + float(metric.get("interval", 2))
                 self.monitor_stop.wait(0.2)
         self.monitor_thread = threading.Thread(target=loop, daemon=True)
         self.monitor_thread.start()
 
+    def public_metrics(self) -> List[Dict[str, Any]]:
+        now = now_ms()
+        specs = {item["id"]: item for item in self.config.get("monitoring", {}).get("metrics", [])}
+        with STATE_LOCK:
+            values = copy.deepcopy(list(self.metrics.values()))
+        for value in values:
+            spec = specs.get(value["id"], {})
+            stale_after = float(spec.get("staleAfter", max(float(spec.get("interval", 2)) * 3,
+                                                           float(spec.get("timeout", 5)) * 2)))
+            value["stale"] = now - value.get("updatedAt", 0) > stale_after * 1000
+        return values
+
+    def refresh_metrics(self, group: Optional[str] = None, failed_only: bool = False) -> int:
+        count = 0
+        for metric in list(self.config.get("monitoring", {}).get("metrics", [])):
+            if group and metric.get("group") != group:
+                continue
+            with STATE_LOCK:
+                if failed_only and self.metrics.get(metric["id"], {}).get("ok", True):
+                    continue
+                if metric["id"] in self.metric_running:
+                    continue
+                self.metric_running.add(metric["id"])
+                generation = self.config_generation
+            self.monitor_pool.submit(self._collect_metric, copy.deepcopy(metric), generation)
+            count += 1
+        return count
+
+    def job_history(self) -> List[Dict[str, Any]]:
+        self._prune_jobs()
+        with STATE_LOCK:
+            return [job.public() | {"lines": []} for job in sorted(
+                self.jobs.values(), key=lambda item: item.started_at, reverse=True)]
+
+    def clear_finished_jobs(self) -> int:
+        with STATE_LOCK:
+            ids = [job_id for job_id, job in self.jobs.items()
+                   if job.status not in ("queued", "running", "stopping")]
+            for job_id in ids:
+                del self.jobs[job_id]
+        return len(ids)
+
+    def diagnostics(self) -> Dict[str, Any]:
+        return redact({"version": VERSION, "uptimeMs": now_ms() - self.started_at,
+                       "profile": self.config.get("project", {}).get("name", self.config_path.name),
+                       "configPath": str(self.config_path),
+                       "transport": self.config.get("target", {}).get("transport", "ssh"),
+                       "monitorPaused": self.monitor_paused, "metricCount": len(self.metrics),
+                       "runningMetrics": len(self.metric_running),
+                       "activeJobs": sum(j.status in ("queued", "running", "stopping") for j in self.jobs.values()),
+                       "terminalSessions": len(self.terminal_sessions),
+                       "recentErrors": copy.deepcopy(self.recent_errors)})
+
+    def diagnostic_report(self, fmt: str = "json") -> str:
+        payload = {"diagnostics": self.diagnostics(), "metrics": self.public_metrics(),
+                   "jobs": self.job_history()[:50]}
+        if fmt == "markdown":
+            d = payload["diagnostics"]
+            rows = ["# Camera Debug Studio 诊断报告", "", f"- 版本：{d['version']}",
+                    f"- Profile：{d['profile']}", f"- Transport：{d['transport']}",
+                    f"- 指标：{d['metricCount']}", f"- 活动任务：{d['activeJobs']}", "", "## 指标快照"]
+            rows += [f"- {m['id']}: {m.get('value')} ({'OK' if m.get('ok') else m.get('errorCode')})"
+                     for m in payload["metrics"]]
+            return "\n".join(rows) + "\n"
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def _redact_diagnostic(self, value: Any) -> Any:
+        """Apply standard key redaction and mask configured secret literals in text."""
+        safe = redact(copy.deepcopy(value))
+        secrets: List[str] = []
+
+        def collect_secrets(item: Any) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if key in SENSITIVE_KEYS and isinstance(child, str) and child:
+                        secrets.append(str(child))
+                    else:
+                        collect_secrets(child)
+            elif isinstance(item, list):
+                for child in item:
+                    collect_secrets(child)
+
+        collect_secrets(self.config)
+        if ACCESS_TOKEN:
+            secrets.append(ACCESS_TOKEN)
+
+        def scrub(item: Any) -> Any:
+            if isinstance(item, dict):
+                return {key: scrub(child) for key, child in item.items()}
+            if isinstance(item, list):
+                return [scrub(child) for child in item]
+            if isinstance(item, str):
+                for secret in secrets:
+                    if secret:
+                        item = item.replace(secret, "[REDACTED]")
+            return item
+        return scrub(safe)
+
+    def _record_diagnostic_event(self, event_type: str, details: Dict[str, Any]) -> None:
+        """Append a bounded, redacted event when a diagnostic session is active."""
+        with STATE_LOCK:
+            session = self.diagnostic_session
+            if not session or session.get("status") != "active":
+                return
+            event = self._redact_diagnostic({"time": now_ms(), "type": event_type,
+                                             "details": details})
+            session["timeline"].append(event)
+            if len(session["timeline"]) > MAX_DIAGNOSTIC_EVENTS:
+                del session["timeline"][:-MAX_DIAGNOSTIC_EVENTS]
+
+    def start_diagnostic_session(self, name: str = "") -> Dict[str, Any]:
+        clean_name = str(name or "诊断会话").strip()
+        if not clean_name:
+            clean_name = "诊断会话"
+        if len(clean_name) > 100:
+            raise ApiError("诊断会话名称不能超过 100 个字符", "invalid_session_name")
+        started = now_ms()
+        snapshot = self.public_metrics()
+        with STATE_LOCK:
+            if self.diagnostic_session and self.diagnostic_session.get("status") == "active":
+                raise ApiError("已有活动诊断会话", "diagnostic_session_active")
+            self.diagnostic_session = {
+                "id": uuid.uuid4().hex[:12], "name": clean_name,
+                "startedAt": started, "endedAt": None, "status": "active",
+                "metricSnapshot": self._redact_diagnostic(snapshot), "timeline": [],
+            }
+        self._record_diagnostic_event("session_started", {
+            "metricCount": len(snapshot),
+            "profile": self.config.get("project", {}).get("name", self.config_path.name),
+            "transport": self.config.get("target", {}).get("transport", "ssh"),
+        })
+        return self.get_diagnostic_session()
+
+    def get_diagnostic_session(self) -> Optional[Dict[str, Any]]:
+        with STATE_LOCK:
+            if self.diagnostic_session is None:
+                return None
+            return self._redact_diagnostic(self.diagnostic_session)
+
+    def end_diagnostic_session(self) -> Dict[str, Any]:
+        self._record_diagnostic_event("session_ended", {})
+        with STATE_LOCK:
+            if not self.diagnostic_session or self.diagnostic_session.get("status") != "active":
+                raise ApiError("没有活动诊断会话", "diagnostic_session_not_active")
+            self.diagnostic_session["endedAt"] = now_ms()
+            self.diagnostic_session["status"] = "ended"
+        session = self.get_diagnostic_session()
+        assert session is not None
+        return session
+
+    def clear_diagnostic_session(self) -> bool:
+        with STATE_LOCK:
+            if self.diagnostic_session and self.diagnostic_session.get("status") == "active":
+                raise ApiError("请先结束活动诊断会话", "diagnostic_session_active")
+            existed = self.diagnostic_session is not None
+            self.diagnostic_session = None
+        return existed
+
+    def diagnostic_session_report(self, fmt: str = "json") -> str:
+        session = self.get_diagnostic_session()
+        if session is None:
+            raise ApiError("诊断会话不存在", "diagnostic_session_not_found")
+        payload = self._redact_diagnostic({"session": session})
+        if fmt == "json":
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        if fmt != "markdown":
+            raise ApiError("导出格式只能是 json 或 markdown", "invalid_report_format")
+        rows = ["# Camera Debug Studio 诊断会话", "",
+                f"- ID：{session['id']}", f"- 名称：{session['name']}",
+                f"- 状态：{session['status']}", f"- 开始时间：{session['startedAt']}",
+                f"- 结束时间：{session.get('endedAt') or '-'}", "", "## 初始指标快照"]
+        rows += [f"- {item.get('id')}: {item.get('value')} "
+                 f"({'OK' if item.get('ok') else item.get('errorCode', 'ERROR')})"
+                 for item in session.get("metricSnapshot", [])]
+        rows += ["", "## 时间线"]
+        rows += [f"- {item['time']} · {item['type']} · "
+                 f"{json.dumps(item.get('details', {}), ensure_ascii=False)}"
+                 for item in session.get("timeline", [])]
+        return "\n".join(rows) + "\n"
+
 
 RUNTIME: Runtime
+ACCESS_TOKEN = ""
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CameraDebugStudio/0.1"
+    server_version = f"CameraDebugStudio/{VERSION}"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -694,48 +967,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def body_json(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
+    def error_response(self, message: str, status: int = 400, code: str = "bad_request",
+                       details: Any = None) -> None:
+        self.json_response({"error": {"code": code, "message": str(message), "details": details}}, status)
+
+    def authorized(self, parsed: Any = None) -> bool:
+        parsed = parsed or urlparse(self.path)
+        return token_authorized(ACCESS_TOKEN, self.headers.get("X-Access-Token", ""), parsed.query)
+
+    def body_json(self, max_bytes: int = MAX_BODY_BYTES) -> Dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ApiError("Content-Length 无效", "invalid_content_length")
+        if length < 0 or length > max_bytes:
+            raise ApiError("请求体过大", "request_too_large")
         return json.loads(self.rfile.read(length) or b"{}")
 
     def websocket_send(self, payload: Dict[str, Any], opcode: int = 1) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        length = len(body)
-        header = bytes([0x80 | opcode])
-        if length < 126:
-            header += bytes([length])
-        elif length < 65536:
-            header += bytes([126]) + struct.pack("!H", length)
-        else:
-            header += bytes([127]) + struct.pack("!Q", length)
-        self.connection.sendall(header + body)
+        self.connection.sendall(websocket_frame(payload, opcode))
 
     def websocket_read(self) -> Optional[Dict[str, Any]]:
-        first = self.rfile.read(2)
-        if len(first) != 2:
-            return None
-        opcode, length = first[0] & 0x0F, first[1] & 0x7F
-        masked = bool(first[1] & 0x80)
-        if length == 126:
-            length = struct.unpack("!H", self.rfile.read(2))[0]
-        elif length == 127:
-            length = struct.unpack("!Q", self.rfile.read(8))[0]
-        if length > 1024 * 1024:
-            raise ValueError("WebSocket 消息过大")
-        mask = self.rfile.read(4) if masked else b""
-        payload = self.rfile.read(length)
-        if masked:
-            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-        if opcode == 8:
-            return None
-        if opcode == 9:
+        message = read_websocket_message(self.rfile, MAX_WS_BYTES)
+        if message and message.get("_control") == "ping":
+            payload = message["payload"]
             self.connection.sendall(b"\x8a" + bytes([len(payload)]) + payload)
             return {}
-        if opcode != 1:
-            return {}
-        return json.loads(payload.decode("utf-8"))
+        return message
 
     def terminal_websocket(self) -> None:
+        if not self.authorized():
+            return self.error_response("访问令牌无效", HTTPStatus.UNAUTHORIZED, "unauthorized")
         key = self.headers.get("Sec-WebSocket-Key", "")
         if not key or self.headers.get("Upgrade", "").lower() != "websocket":
             return self.json_response({"error": "需要 WebSocket Upgrade"}, 426)
@@ -754,7 +1016,11 @@ class Handler(BaseHTTPRequestHandler):
             session = TerminalSession(RUNTIME, send)
             with STATE_LOCK:
                 RUNTIME.terminal_sessions.add(session)
-            send({"type": "ready", "transport": RUNTIME.config.get("target", {}).get("transport", "ssh")})
+            send({
+                "type": "ready",
+                "transport": RUNTIME.config.get("target", {}).get("transport", "ssh"),
+                "backend": session.backend,
+            })
             while not session.closed.is_set():
                 message = self.websocket_read()
                 if message is None:
@@ -777,30 +1043,60 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if path.startswith(("/api/", "/ws/")) and not self.authorized(parsed):
+            return self.error_response("访问令牌无效", HTTPStatus.UNAUTHORIZED, "unauthorized")
         if path == "/ws/terminal":
             return self.terminal_websocket()
         if path == "/api/config":
-            safe = dict(RUNTIME.config)
-            safe["configPath"] = str(RUNTIME.config_path)
-            return self.json_response(safe)
+            return self.json_response(RUNTIME.safe_config())
         if path == "/api/metrics":
-            return self.json_response({"metrics": list(RUNTIME.metrics.values())})
+            return self.json_response({"metrics": RUNTIME.public_metrics(), "paused": RUNTIME.monitor_paused})
+        if path == "/api/version":
+            return self.json_response({"version": VERSION})
+        if path == "/api/registers/devices":
+            return self.json_response({"devices": REGISTER_CATALOG.summaries()})
+        if path == "/api/diagnostics":
+            return self.json_response(RUNTIME.diagnostics())
+        if path == "/api/diagnostics/report":
+            query = dict(item.split("=", 1) for item in parsed.query.split("&") if "=" in item)
+            return self.json_response({"format": query.get("format", "json"),
+                                       "content": RUNTIME.diagnostic_report(query.get("format", "json"))})
+        if path in ("/api/diagnostic-session", "/api/diagnostics/session"):
+            return self.json_response({"session": RUNTIME.get_diagnostic_session()})
+        if path in ("/api/diagnostic-session/report", "/api/diagnostics/session/report"):
+            query = dict(item.split("=", 1) for item in parsed.query.split("&") if "=" in item)
+            fmt = query.get("format", "json")
+            try:
+                return self.json_response({"format": fmt,
+                                           "content": RUNTIME.diagnostic_session_report(fmt)})
+            except ApiError as exc:
+                return self.error_response(str(exc), HTTPStatus.BAD_REQUEST, exc.code, exc.details)
+        if path == "/api/jobs":
+            return self.json_response({"jobs": RUNTIME.job_history()})
         if path == "/api/config/profiles":
             return self.json_response({"profiles": RUNTIME.profiles()})
+        if path == "/api/platform-scripts":
+            return self.json_response(RUNTIME.platform_scripts())
+        if path == "/api/sftp/list":
+            try:
+                directory = parse_qs(parsed.query, keep_blank_values=True).get("path", ["/"])[0]
+                return self.json_response(RUNTIME.sftp_list(directory))
+            except ApiError as exc:
+                return self.error_response(str(exc), HTTPStatus.BAD_REQUEST, exc.code, exc.details)
         if path == "/api/pytest/collect":
             try:
                 return self.json_response(RUNTIME.collect_pytest())
             except ValueError as exc:
-                return self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return self.error_response(str(exc), HTTPStatus.BAD_REQUEST, "pytest_collect_failed")
         if path == "/api/manual":
             manual = ROOT / "docs" / "用户手册.md"
             if not manual.is_file():
-                return self.json_response({"error": "用户手册不存在"}, 404)
+                return self.error_response("用户手册不存在", 404, "not_found")
             return self.json_response({"content": manual.read_text(encoding="utf-8")})
         if path.startswith("/api/jobs/"):
             parts = path.strip("/").split("/")
             job = RUNTIME.jobs.get(parts[2]) if len(parts) >= 3 else None
-            if not job: return self.json_response({"error": "任务不存在"}, 404)
+            if not job: return self.error_response("任务不存在", 404, "job_not_found")
             try: after = int(dict(x.split("=", 1) for x in parsed.query.split("&") if "=" in x).get("after", 0))
             except ValueError: after = 0
             return self.json_response(job.public(after))
@@ -818,13 +1114,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
-            data = self.body_json()
+            if not self.authorized():
+                return self.error_response("访问令牌无效", HTTPStatus.UNAUTHORIZED, "unauthorized")
+            data = self.body_json(MAX_UPLOAD_REQUEST_BYTES if self.path == "/api/sftp/upload" else MAX_BODY_BYTES)
             if self.path == "/api/commands":
                 command = str(data.get("command", "")).strip()
                 if not command: raise ValueError("命令不能为空")
                 return self.json_response(RUNTIME.start_job(command).public(), 201)
+            if self.path == "/api/registers/decode":
+                return self.json_response(REGISTER_CATALOG.decode(
+                    str(data.get("device", "")), data.get("register", ""), data.get("value", "")))
+            if self.path in ("/api/diagnostic-session/start", "/api/diagnostics/session/start"):
+                return self.json_response({"session": RUNTIME.start_diagnostic_session(
+                    str(data.get("name", "")))}, 201)
+            if self.path in ("/api/diagnostic-session/end", "/api/diagnostics/session/end"):
+                return self.json_response({"session": RUNTIME.end_diagnostic_session()})
+            if self.path in ("/api/diagnostic-session/clear", "/api/diagnostics/session/clear"):
+                return self.json_response({"cleared": RUNTIME.clear_diagnostic_session()})
             if self.path == "/api/tests":
                 return self.json_response(RUNTIME.run_test(str(data.get("testId", "")), data.get("params", {})).public(), 201)
+            if self.path == "/api/platform-scripts/run":
+                return self.json_response(RUNTIME.start_platform_script(str(data.get("scriptId", ""))).public(), 201)
+            if self.path == "/api/sftp/upload":
+                return self.json_response(RUNTIME.sftp_upload(
+                    str(data.get("path", "/")), str(data.get("name", "")), str(data.get("content", ""))
+                ), 201)
             if self.path == "/api/pytest/run":
                 return self.json_response(RUNTIME.start_pytest(str(data.get("nodeId", ""))).public(), 201)
             if self.path == "/api/connection/test":
@@ -840,24 +1154,62 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/config/save":
                 RUNTIME.save_config(data.get("config"))
                 return self.json_response({"ok": True})
+            if self.path == "/api/config/validate":
+                preview = RUNTIME.preview_config(data.get("config"))
+                return self.json_response({"valid": True, "config": preview})
+            if self.path in ("/api/config/profiles/copy", "/api/config/copy"):
+                copied = RUNTIME.copy_profile(str(data.get("sourceFile", data.get("source", ""))),
+                                              str(data.get("file", data.get("destination", ""))),
+                                              str(data.get("name", "")))
+                return self.json_response({"ok": True, "file": copied["file"],
+                                           "profile": copied}, 201)
             if self.path.endswith("/stop") and self.path.startswith("/api/jobs/"):
                 job_id = self.path.strip("/").split("/")[2]
                 return self.json_response({"stopped": RUNTIME.stop_job(job_id)})
             if self.path == "/api/config/reload":
                 RUNTIME.reload(); return self.json_response({"ok": True})
-            self.json_response({"error": "接口不存在"}, 404)
+            if self.path == "/api/metrics/control":
+                action = str(data.get("action", ""))
+                scheduled = None
+                if action == "pause": RUNTIME.monitor_paused = True
+                elif action == "resume": RUNTIME.monitor_paused = False
+                elif action == "refresh":
+                    group = data.get("group")
+                    if group is not None and not isinstance(group, str):
+                        raise ApiError("监控分组必须是字符串", "invalid_metric_group")
+                    scheduled = RUNTIME.refresh_metrics(group or None, bool(data.get("failedOnly")))
+                else: raise ApiError("未知监控操作", "invalid_monitor_action")
+                return self.json_response({"ok": True, "paused": RUNTIME.monitor_paused,
+                                           "scheduled": scheduled})
+            if self.path == "/api/jobs/clear":
+                return self.json_response({"cleared": RUNTIME.clear_finished_jobs()})
+            self.error_response("接口不存在", 404, "not_found")
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
-            self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            if isinstance(exc, ApiError):
+                code = exc.code
+            elif isinstance(exc, ConfigValidationError):
+                code = "invalid_config"
+            else:
+                code = "bad_request"
+            details = getattr(exc, "details", None)
+            RUNTIME.record_error("api", str(exc), code)
+            self.error_response(str(exc), HTTPStatus.BAD_REQUEST, code, details)
+        except Exception as exc:
+            RUNTIME.record_error("api", str(exc))
+            self.error_response("服务器内部错误", HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Camera Debug Studio")
-    parser.add_argument("--config", default=str(PROFILE_DIR / "demo-local"))
+    parser.add_argument("--config", default=str(PROFILE_DIR / "bmc"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--access-token", default=os.environ.get("CAMERA_DEBUG_ACCESS_TOKEN", ""),
+                        help="保护 HTTP API 和 WebSocket 的可选访问令牌")
     args = parser.parse_args()
-    global RUNTIME
+    global RUNTIME, ACCESS_TOKEN
+    ACCESS_TOKEN = args.access_token
     RUNTIME = Runtime(Path(args.config).expanduser().resolve())
     RUNTIME.start_monitor()
     url = f"http://{args.host}:{args.port}"
@@ -871,12 +1223,18 @@ def main() -> None:
             return
         raise
     print(f"Camera Debug Studio: {url}\nConfig: {RUNTIME.config_path}")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: 服务正在非回环地址监听。请仅在可信网络使用，并建议设置 --access-token。",
+              file=sys.stderr)
+        if not ACCESS_TOKEN:
+            print("WARNING: 当前未启用访问令牌，所有可访问该端口的用户都能执行命令。", file=sys.stderr)
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally:
         RUNTIME.monitor_stop.set()
+        RUNTIME.monitor_pool.shutdown(wait=False, cancel_futures=True)
         with STATE_LOCK:
             sessions = list(RUNTIME.terminal_sessions)
         for session in sessions:

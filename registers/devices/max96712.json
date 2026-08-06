@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1.0",
+  "device": {
+    "model": "MAX96712",
+    "manufacturer": "Analog Devices / Maxim Integrated",
+    "valueWidthBits": 8,
+    "datasheet": {"title": "MAX96712 Register Details", "revision": "待补充", "source": "用户提供的寄存器表截图"}
+  },
+  "registers": [
+    {"id": "DEV_REG0", "name": "REG0", "address": "0x0000", "description": "Device address/configuration，当前仅录入地址索引", "fields": []},
+    {"id": "DEV_REG1", "name": "REG1", "address": "0x0001", "description": "I2C selection/failover，当前仅录入地址索引", "fields": []},
+    {"id": "DEV_REG4", "name": "REG4", "address": "0x0004", "description": "Video enable，当前仅录入地址索引", "fields": []},
+    {"id": "DEV_REG5", "name": "REG5", "address": "0x0005", "description": "Lock/error configuration，当前仅录入地址索引", "fields": []},
+    {"id": "DEV_REG6", "name": "REG6", "address": "0x0006", "description": "GMSL2 and link enable，当前仅录入地址索引", "fields": []},
+    {
+      "id": "CTRL3", "name": "CTRL3", "address": "0x001A", "widthBits": 8,
+      "description": "GMSL2 Link A 锁定、ERRB 错误汇总和 CMU 锁定状态",
+      "fields": [
+        {"id": "LOCKED", "bits": {"msb": 3, "lsb": 3}, "description": "GMSL2 Link A bidirectional lock",
+         "values": {"0": {"meaning": "GMSL2 Link A 未锁定", "status": "warning"}, "1": {"meaning": "GMSL2 Link A 已锁定", "status": "normal"}}},
+        {"id": "ERROR", "bits": {"msb": 2, "lsb": 2}, "description": "ERRB pin 的反相错误状态",
+         "values": {"0": {"meaning": "ERRB 未触发（ERRB pin = 1）", "status": "normal"}, "1": {"meaning": "ERRB 已触发（ERRB pin = 0）", "status": "error"}}},
+        {"id": "CMU_LOCKED", "bits": {"msb": 1, "lsb": 1}, "description": "Clock Multiplier Unit lock",
+         "values": {"0": {"meaning": "CMU 未锁定", "status": "warning"}, "1": {"meaning": "CMU 已锁定", "status": "normal"}}}
+      ]
+    }
+  ]
+}
